@@ -1,0 +1,31 @@
+[project]
+name = "steering-mvp"
+version = "0.1.0"
+description = "Does corruption geometry matter when denoising activation steering?"
+requires-python = ">=3.12"
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.44",
+    "datasets>=2.20",
+    "accelerate>=0.33",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.13",
+    "matplotlib>=3.9",
+    "omegaconf>=2.3",
+    "tqdm>=4.66",
+    "requests>=2.32",
+]
+
+[project.optional-dependencies]
+sae = ["sae-lens>=5.0"]
+dev = ["pytest>=8.0", "ruff>=0.6", "jupyter>=1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 99
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

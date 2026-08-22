@@ -1,0 +1,12 @@
+# Large or regenerable. results/ is deliberately NOT here: every number in the report
+# traces to a committed file under it.
+artifacts/
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.DS_Store
+.env
+*.swp
