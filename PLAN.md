@@ -43,6 +43,17 @@ Initial grid:
 
 Trim only clearly unusable extremes during baseline validation.
 
+**Trimmed after Step 1 baseline validation (2026-08-22):** `r >= 1.5` produces incoherent text on
+every SAE feature tried (word-salad by r=1.0-1.5 on several; see DEVLOG). Working grid going
+forward:
+
+`0.0, 0.2, 0.4, 0.6, 0.8, 1.0`
+
+The single-decoder-direction, no-denoiser B1 push on this SAE runs "hotter" per unit `r` than
+the exploratory repo's own alpha grid suggested (its usable range extended past r=3) -- see
+DEVLOG for the two decoding-config bugs found and fixed during this comparison, and for why the
+remaining gap is attributed to those, not to a further pipeline error.
+
 ### Intervention positions
 
 Use **all positions**: prompt + generated-token forwards.

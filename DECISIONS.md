@@ -63,12 +63,24 @@ notation. Storing the map with the weights makes that impossible to repeat silen
 
 ## D4 — Intervention positions
 
-**All positions**: prompt forwards and every generated-token forward.
+**All positions**: prompt forwards and every generated-token forward -- **except position 0**
+(the attention sink), which is skipped by every intervention (steering and denoising alike),
+consistently.
 
-**Why:** measured, not assumed. Restricting to generated positions removes 20-43% of the steering
-effect on GPT-2 and 11-31% on Gemma -- the prompt's shifted keys and values are attended to by
-everything generated. Response-only is a legitimate setting but it is a *weaker* one, and making
-it the default would quietly weaken every arm including the baseline.
+**Why "all positions":** measured, not assumed. Restricting to generated positions removes
+20-43% of the steering effect on GPT-2 and 11-31% on Gemma -- the prompt's shifted keys and
+values are attended to by everything generated. Response-only is a legitimate setting but it is
+a *weaker* one, and making it the default would quietly weaken every arm including the baseline.
+
+**Why skip the sink (decided 2026-08-22):** GPT-2's position 0 carries ~34x the median token
+norm (`spaces.py`, DEVLOG). Steering it alone is not inert -- 2.8-9.0% relative logit change
+across r in {1, 3} -- but it is small next to steering everywhere else (24-45% at the same r's),
+and the denoiser is never trained on inputs anywhere near that scale, so applying `D` there is
+an out-of-distribution extrapolation with no basis for trusting the output. The exploratory repo
+built this as a `skip_sink` flag on every intervention but never enabled it in any run (zero
+hits in its `configs/` or `scripts/`); here it is the default, not an option, so B1/B2/D-arms
+all treat position 0 the same way and no comparison is confounded by one arm touching it and
+another not.
 
 ---
 
