@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import requests
 import torch
 from torch import nn
+from tqdm.auto import tqdm
 
 from steering import spaces
 from steering.hooks import ResidualHook
@@ -155,7 +159,8 @@ def compute_feature_stats(
     original_padding_side = tokenizer.padding_side
     tokenizer.padding_side = "right"
     try:
-        for start in range(0, len(texts), batch_size):
+        starts = range(0, len(texts), batch_size)
+        for start in tqdm(starts, total=len(starts), desc="feature stats", leave=False):
             batch = texts[start : start + batch_size]
             enc = tokenizer(
                 batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length
@@ -163,17 +168,21 @@ def compute_feature_stats(
 
             with ResidualHook(model, layer=layer, capture=True) as hook:
                 model(**enc)
-            hidden = hook.captured[0]
+            hidden = hook.captured[0]  # ResidualHook captures to CPU regardless of `device`
 
             start_pos = 1 if exclude_sink else 0
-            mask = enc["attention_mask"].bool()[:, start_pos:]
+            # Mask is built from `enc`, which lives on `device`; `hidden` is on CPU by the
+            # capture above. Move the (cheap) mask rather than the (large) hidden states.
+            mask = enc["attention_mask"].bool()[:, start_pos:].to(hidden.device)
             acts = hidden[:, start_pos:, :][mask]
             if acts.numel() == 0:
                 continue
             if center:
                 acts = spaces.center(acts)
 
-            features = sae_encode(sae, acts)
+            # `acts` is on CPU; the SAE may not be (`sae.W_dec.device`). Move the small,
+            # already-masked batch rather than requiring the SAE itself to live on CPU.
+            features = sae_encode(sae, acts.to(sae.W_dec.device))
             fire_counts += (features > 0).sum(dim=0).cpu().double()
             act_sums += features.sum(dim=0).cpu().double()
             total_tokens += acts.shape[0]
@@ -314,6 +323,100 @@ def load_split(path: str | Path) -> VectorSplit:
             f"({split.fingerprint()} != {stored}). The frozen file was edited."
         )
     return split
+
+
+# DECISIONS D1 criterion 2. RESPONSIVE_THRESHOLD and the ppl_ratio bound were the exploratory
+# repo's own calibrated numbers; MIN_DIST2_RATIO too, added after this project's own Step 1
+# gate independently ran into the failure it guards against (ppl_ratio heavy-tailed and
+# non-monotonic across features at matched r -- DEVLOG 2026-08-22).
+RESPONSIVE_THRESHOLD = 0.02
+MAX_PPL_RATIO = 4.0
+MIN_DIST2_RATIO = 0.8
+DEFAULT_PROBE_R = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0)
+
+
+@torch.no_grad()
+def probe_steerability(
+    model: nn.Module,
+    tokenizer,
+    sae,
+    layer: int,
+    feature_ids: list[int],
+    prompts: list[str],
+    scale: float,
+    device,
+    center: bool,
+    r_values: tuple[float, ...] = DEFAULT_PROBE_R,
+    max_new_tokens: int = 32,
+    seed: int = 0,
+) -> dict[int, dict]:
+    """Concept response per feature over an ``r`` grid, subject to a dual fluency guard.
+
+    Returns ``{feature_id: {peak, r_at_peak, ppl_ratio_at_peak, dist2_at_peak, baseline_act,
+    baseline_fire, n_r_fluent, usable}}``, where ``peak`` is the largest SAE mean-activation
+    gain over the unsteered baseline among ``r`` values that pass **both**
+    ``ppl_ratio <= MAX_PPL_RATIO`` and ``dist_2 >= MIN_DIST2_RATIO * baseline_dist_2``.
+
+    Both guards are required, not perplexity alone: they fail in opposite directions
+    (repetition collapse drives perplexity down, word salad drives it up), so perplexity by
+    itself passes both failure modes silently. See DECISIONS D1.
+
+    Run *before* any denoiser exists -- this only decides which features the frozen split may
+    contain, never anything about how well a method denoises them.
+    """
+    from steering import generate as generate_module
+    from steering import metrics as metrics_module
+    from steering.interventions import AdditiveSteering, NoSteering
+
+    directions = steering_directions(sae, feature_ids)
+
+    clean = generate_module.generate(model, tokenizer, prompts, NoSteering(), layer, device,
+                                     max_new_tokens=max_new_tokens, seed=seed)
+    baseline_nll = metrics_module.reference_nll(model, tokenizer, prompts, clean.texts, device)
+    valid = ~baseline_nll.isnan()
+    baseline_ppl = float(baseline_nll[valid].mean().exp()) if valid.any() else float("nan")
+    baseline_dist2 = metrics_module.distinct_n(clean.texts, 2)
+
+    results: dict[int, dict] = {}
+    n_usable = 0
+    progress = tqdm(list(zip(feature_ids, directions, strict=True)), desc="steerability")
+    for feature_id, v in progress:
+        base_score = metrics_module.sae_concept_score(
+            model, tokenizer, sae, feature_id, layer, prompts, clean.texts, device, center
+        )
+        best = {
+            "peak": 0.0, "r_at_peak": 0.0, "ppl_ratio_at_peak": float("nan"),
+            "dist2_at_peak": float("nan"), "baseline_act": base_score["mean_act"],
+            "baseline_fire": base_score["fire_rate"], "n_r_fluent": 0,
+        }
+        for r in r_values:
+            iv = AdditiveSteering(v, r=r, scale=scale)
+            out = generate_module.generate(model, tokenizer, prompts, iv, layer, device,
+                                           max_new_tokens=max_new_tokens, seed=seed)
+            nll = metrics_module.reference_nll(model, tokenizer, prompts, out.texts, device)
+            nll_valid = ~nll.isnan()
+            ppl = float(nll[nll_valid].mean().exp()) if nll_valid.any() else float("inf")
+            ratio = ppl / baseline_ppl if baseline_ppl else float("inf")
+            dist2 = metrics_module.distinct_n(out.texts, 2)
+
+            if ratio > MAX_PPL_RATIO or dist2 < MIN_DIST2_RATIO * baseline_dist2:
+                continue
+            best["n_r_fluent"] += 1
+
+            score = metrics_module.sae_concept_score(
+                model, tokenizer, sae, feature_id, layer, prompts, out.texts, device, center
+            )
+            delta = score["mean_act"] - base_score["mean_act"]
+            if delta > best["peak"]:
+                best.update(peak=delta, r_at_peak=r, ppl_ratio_at_peak=ratio,
+                           dist2_at_peak=dist2)
+
+        best["usable"] = best["peak"] > RESPONSIVE_THRESHOLD
+        results[feature_id] = best
+        n_usable += int(best["usable"])
+        progress.set_postfix(usable=f"{n_usable}/{len(results)}")
+
+    return results
 
 
 def select_and_freeze_split(
@@ -540,11 +643,14 @@ def answer_activations(
         attention[:, :prompt_len] = enc["attention_mask"]
         with ResidualHook(model, layer=layer, capture=True) as hook:
             model(generated, attention_mask=attention)
+        # ResidualHook captures to CPU regardless of `device`; `generated` (and anything built
+        # from it) lives on `device`, so the mask has to follow the hidden states, not the
+        # other way round.
         hidden = hook.captured[0][:, prompt_len:, :].float()
         if center:
             hidden = spaces.center(hidden)
 
-        mask = _answer_mask(generated, prompt_len, eos).unsqueeze(-1)
+        mask = _answer_mask(generated, prompt_len, eos).unsqueeze(-1).to(hidden.device)
         totals = (hidden * mask).sum(1)
         counts = mask.sum(1).clamp_min(1)
         means.append((totals / counts).cpu())
@@ -644,3 +750,104 @@ def save_persona_vectors(vectors: dict[str, dict], path: str | Path) -> None:
 def load_persona_vectors(path: str | Path) -> dict[str, torch.Tensor]:
     payload = json.loads(Path(path).read_text())
     return {name: torch.tensor(entry["vector"]) for name, entry in payload.items()}
+
+
+# --------------------------------------------------------------------------------------------
+# Neuronpedia: auto-interp descriptions, for DECISIONS D1 criterion 3
+# --------------------------------------------------------------------------------------------
+# An SAE feature has an index, not a name, so there is nothing to ask a judge about.
+# Neuronpedia hosts auto-interp descriptions for the SAE used here, which is what makes a
+# judge-scored concept axis possible on GPT-2 at all. The description says what makes a
+# feature *fire*, not what steering with it *produces* -- a deliberately imperfect proxy.
+#
+# Cached to disk, one file per feature: responses never change and the API is rate-limited.
+# ``requests``, not ``urllib`` -- macOS Python has no CA bundle and urllib fails with
+# CERTIFICATE_VERIFY_FAILED, while requests bundles certifi.
+
+NEURONPEDIA_API = "https://www.neuronpedia.org/api/feature"
+
+# Descriptions naming a token/syntax pattern rather than a semantic concept -- a judge cannot
+# be asked whether text "expresses the indefinite article 'a'". Ported from the exploratory
+# repo including its bug fix: the trailing ``s?`` is load-bearing. An earlier version ended
+# each alternative at a word boundary and missed every plural; "articles and indefinite
+# articles" slipped through and was selected into a frozen split at the third-highest peak.
+_TOKEN_LEVEL = re.compile(
+    r"\b(?:"
+    r"punctuation|comma|semicolon|colon|period|apostrophe|quotation|bracket|parenthes\w*|"
+    r"whitespace|newline|line break|"
+    r"(?:in)?definite article|the article|"
+    r"the word ['\"]|the term ['\"]|the phrase ['\"]|"
+    r"conjunction|preposition|pronoun|determiner|"
+    r"suffix|prefix|token|morpheme|"
+    r"capital letter|letter ['\"]|single character|special character|non-english character"
+    r")s?\b",
+    re.IGNORECASE,
+)
+
+
+def is_token_level(description: str) -> bool:
+    """Whether a description names a token/syntax pattern rather than a semantic concept."""
+    return bool(_TOKEN_LEVEL.search(description))
+
+
+def fetch_feature(
+    neuronpedia_id: str,
+    index: int,
+    cache_dir: str | Path,
+    timeout: int = 25,
+    pause: float = 0.4,
+) -> dict | None:
+    """One feature's Neuronpedia record, cached. ``None`` if it cannot be fetched.
+
+    ``cache_dir`` is an explicit argument, not defaulted to ``io.ARTIFACTS`` -- consistent with
+    every other function in this project that reads external state, the caller says where.
+    """
+    model_id, source = neuronpedia_id.split("/", 1)
+    path = Path(cache_dir) / source / f"{index}.json"
+    if path.exists():
+        return json.loads(path.read_text())
+
+    try:
+        r = requests.get(f"{NEURONPEDIA_API}/{model_id}/{source}/{index}", timeout=timeout)
+        r.raise_for_status()
+        payload = r.json()
+    except Exception:  # noqa: BLE001 -- any failure here means "skip this feature", not raise
+        return None
+    time.sleep(pause)  # be polite to a free service
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload))
+    return payload
+
+
+def describe(payload: dict | None) -> str | None:
+    """The auto-interp description from a feature record, if it has one."""
+    if not payload:
+        return None
+    explanations = payload.get("explanations") or []
+    if not explanations:
+        return None
+    description = (explanations[0].get("description") or "").strip()
+    return description or None
+
+
+def describe_features(
+    neuronpedia_id: str, indices: list[int], cache_dir: str | Path
+) -> dict[int, dict]:
+    """Descriptions for many features: ``{index: {description, token_level, frac_nonzero}}``.
+
+    Features with no description are omitted -- they cannot be judged, so they cannot become
+    DEV or TEST features (DECISIONS D1 criterion 3).
+    """
+    out = {}
+    for index in tqdm(indices, desc="neuronpedia", leave=False):
+        payload = fetch_feature(neuronpedia_id, index, cache_dir)
+        description = describe(payload)
+        if description is None:
+            continue
+        out[index] = {
+            "description": description,
+            "token_level": is_token_level(description),
+            "frac_nonzero": payload.get("frac_nonzero"),
+        }
+    return out

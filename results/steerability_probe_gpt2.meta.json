@@ -1,0 +1,27 @@
+{
+  "artifact": "steerability_probe_gpt2.json",
+  "config": {
+    "layer": 6,
+    "max_new_tokens": 32,
+    "model": "gpt2",
+    "n_candidates": 1024,
+    "n_prompts": 32,
+    "r_values": [
+      0.25,
+      0.5,
+      0.75,
+      1.0,
+      1.25,
+      1.5,
+      2.0,
+      2.5,
+      3.0,
+      4.0
+    ],
+    "scale": 88.50018310546875,
+    "seed": 0,
+    "version": 1
+  },
+  "hash": "b749b3e1364c30a9",
+  "int_keyed": true
+}

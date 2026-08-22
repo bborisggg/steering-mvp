@@ -468,6 +468,329 @@ def test_extract_persona_vector_end_to_end(gpt2):
     assert result["trait"] == "formal"
 
 
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available here")
+def test_extract_persona_vector_works_when_model_is_on_mps():
+    """Same device trap as compute_feature_stats/sae_concept_score: answer_activations also
+    captures via ResidualHook(capture=True), which is always CPU, while the answer-mask it
+    combines it with is built from `generated`, on `device`. Relevant for real Step 11 Gemma
+    runs, not just this GPT-2 smoke test."""
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to("mps")
+    trait = vectors.Trait(
+        name="formal", description="speaks formally",
+        positive=["Respond in a very formal, professional register."],
+        negative=["Respond in a very casual, sloppy register."],
+        questions=["Tell me about your day.", "What do you think of the weather?"],
+    )
+    result = vectors.extract_persona_vector(
+        model, tok, trait, layer=LAYER, device="mps", n_extract=2, max_new_tokens=8, seed=0,
+    )
+    assert torch.tensor(result["vector"]).shape == (768,)
+
+
+# --- probe_steerability: the dual fluency guard ------------------------------------------
+
+class _FakeSAEForProbe:
+    """Only W_dec is touched before the monkeypatched generate/metrics take over."""
+
+    W_dec = torch.randn(64, 8)
+
+
+def test_probe_selects_the_peak_among_fluent_r_only():
+    """The rule (DECISIONS D1): peak concept gain among r values passing BOTH ppl_ratio<=4 and
+    dist_2>=0.8*baseline. Every generate/metrics call is monkeypatched to return controlled,
+    hand-picked values, so this pins the selection arithmetic exactly rather than depending on
+    real model behaviour to happen to exercise every branch."""
+    import types
+
+    from steering import generate as generate_module
+    from steering import metrics as metrics_module
+
+    # r=0.25 fluent, small gain; r=0.5 fluent, BEST gain; r=1.0 fails ppl_ratio despite a huge
+    # apparent gain (must be excluded); r=2.0 fails dist_2 despite passing ppl_ratio.
+    PLAN = {
+        0.25: {"ppl_ratio": 1.2, "dist2": 0.95, "gain": 0.05},
+        0.5: {"ppl_ratio": 2.0, "dist2": 0.85, "gain": 0.20},
+        1.0: {"ppl_ratio": 5.0, "dist2": 0.90, "gain": 0.90},  # excluded: ppl too high
+        2.0: {"ppl_ratio": 1.5, "dist2": 0.50, "gain": 0.99},  # excluded: dist2 too low
+    }
+    BASELINE_DIST2 = 1.0
+    BASELINE_ACT = 0.01
+
+    def fake_generate(model, tokenizer, prompts, intervention, layer, device, **kw):
+        r = getattr(intervention, "r", 0.0)
+        return types.SimpleNamespace(texts=[f"r={r}"] * len(prompts), n_decode_steps=[1])
+
+    def fake_reference_nll(model, tokenizer, prompts, texts, device, **kw):
+        import torch as _t
+
+        r = float(texts[0].split("=")[1]) if texts and texts[0] != "r=0.0" else 0.0
+        ratio = PLAN.get(r, {"ppl_ratio": 1.0})["ppl_ratio"]
+        # reference_nll's caller does .exp() on the mean; encode ratio via log so the caller's
+        # arithmetic (exp(mean)) reproduces the intended ppl_ratio relative to a baseline of
+        # ppl=1 (log(1)=0), independent of the real baseline_ppl computed from r=0.
+        import math
+
+        return _t.tensor([math.log(ratio)] * len(prompts))
+
+    def fake_distinct_n(texts, n):
+        r = float(texts[0].split("=")[1]) if texts and texts[0] != "r=0.0" else 0.0
+        return PLAN.get(r, {"dist2": BASELINE_DIST2})["dist2"] * BASELINE_DIST2
+
+    def fake_concept_score(model, tokenizer, sae, feature_id, layer, prompts, continuations,
+                           device, center, **kw):
+        r = float(continuations[0].split("=")[1]) if continuations[0] != "r=0.0" else 0.0
+        if r == 0.0:
+            return {"mean_act": BASELINE_ACT, "fire_rate": 0.01}
+        return {"mean_act": BASELINE_ACT + PLAN[r]["gain"], "fire_rate": 0.5}
+
+    import steering.vectors as vectors_module
+
+    orig = {
+        "generate": generate_module.generate,
+        "reference_nll": metrics_module.reference_nll,
+        "distinct_n": metrics_module.distinct_n,
+        "sae_concept_score": metrics_module.sae_concept_score,
+    }
+    generate_module.generate = fake_generate
+    metrics_module.reference_nll = fake_reference_nll
+    metrics_module.distinct_n = fake_distinct_n
+    metrics_module.sae_concept_score = fake_concept_score
+    try:
+        result = vectors_module.probe_steerability(
+            model=None, tokenizer=None, sae=_FakeSAEForProbe(), layer=6, feature_ids=[42],
+            prompts=["p1", "p2"], scale=90.0, device="cpu", center=True,
+            r_values=(0.25, 0.5, 1.0, 2.0),
+        )
+    finally:
+        generate_module.generate = orig["generate"]
+        metrics_module.reference_nll = orig["reference_nll"]
+        metrics_module.distinct_n = orig["distinct_n"]
+        metrics_module.sae_concept_score = orig["sae_concept_score"]
+
+    r = result[42]
+    assert r["r_at_peak"] == pytest.approx(0.5)
+    assert r["peak"] == pytest.approx(PLAN[0.5]["gain"], rel=1e-4)
+    assert r["n_r_fluent"] == 2  # only 0.25 and 0.5 pass both guards
+    assert r["usable"] is True  # peak 0.20 > RESPONSIVE_THRESHOLD 0.02
+
+
+def test_probe_marks_unusable_when_no_fluent_r_clears_the_gain_threshold():
+    import types
+
+    from steering import generate as generate_module
+    from steering import metrics as metrics_module
+    from steering import vectors as vectors_module
+
+    def fake_generate(model, tokenizer, prompts, intervention, layer, device, **kw):
+        r = getattr(intervention, "r", 0.0)
+        return types.SimpleNamespace(texts=[f"r={r}"] * len(prompts), n_decode_steps=[1])
+
+    def fake_reference_nll(model, tokenizer, prompts, texts, device, **kw):
+        import torch as _t
+
+        return _t.tensor([0.0] * len(prompts))  # ppl_ratio always 1.0 -- always fluent
+
+    def fake_distinct_n(texts, n):
+        return 1.0  # always at baseline -- always fluent
+
+    def fake_concept_score(model, tokenizer, sae, feature_id, layer, prompts, continuations,
+                           device, center, **kw):
+        return {"mean_act": 0.01, "fire_rate": 0.01}  # never moves from baseline
+
+    orig = {
+        "generate": generate_module.generate,
+        "reference_nll": metrics_module.reference_nll,
+        "distinct_n": metrics_module.distinct_n,
+        "sae_concept_score": metrics_module.sae_concept_score,
+    }
+    generate_module.generate = fake_generate
+    metrics_module.reference_nll = fake_reference_nll
+    metrics_module.distinct_n = fake_distinct_n
+    metrics_module.sae_concept_score = fake_concept_score
+    try:
+        result = vectors_module.probe_steerability(
+            model=None, tokenizer=None, sae=_FakeSAEForProbe(), layer=6, feature_ids=[7],
+            prompts=["p1"], scale=90.0, device="cpu", center=True, r_values=(0.5, 1.0),
+        )
+    finally:
+        generate_module.generate = orig["generate"]
+        metrics_module.reference_nll = orig["reference_nll"]
+        metrics_module.distinct_n = orig["distinct_n"]
+        metrics_module.sae_concept_score = orig["sae_concept_score"]
+
+    assert result[7]["usable"] is False
+    assert result[7]["peak"] == pytest.approx(0.0)
+
+
+# --- probe_steerability: small real integration ----------------------------------------------
+
+def test_probe_runs_end_to_end_on_real_gpt2(gpt2, sae):
+    model, tok = gpt2
+    result = vectors.probe_steerability(
+        model, tok, sae, layer=LAYER, feature_ids=[1878, 15452],
+        prompts=["The best thing about", "Yesterday I went to"], scale=90.0, device="cpu",
+        center=True, r_values=(0.5, 1.0), max_new_tokens=8,
+    )
+    assert set(result) == {1878, 15452}
+    for record in result.values():
+        assert "usable" in record and isinstance(record["usable"], bool)
+        assert "baseline_act" in record
+
+
+# --- device consistency: hidden captured to CPU vs. mask/model on MPS --------------------
+# The bug this section exists for: ResidualHook(capture=True) always captures to CPU
+# (deliberate -- caching a large corpus on MPS runs it out of memory), but a mask built from
+# `enc`/`generated` lives on whatever device the model is on. Every test above ran model and
+# SAE on CPU only, so hidden and mask always coincidentally matched -- this was invisible until
+# a real MPS run surfaced it. Skipped, not failed, where MPS isn't available (e.g. CI, Linux).
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available here")
+def test_compute_feature_stats_works_when_model_is_on_mps(sae):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to("mps")
+
+    stats = vectors.compute_feature_stats(
+        model, tok, sae, layer=LAYER,
+        texts=["The quick brown fox jumps over the lazy dog.", "Yesterday I went to the market."],
+        batch_size=2, max_length=32, center=True,
+    )
+    assert stats["frequency"].shape == (sae.cfg.d_sae,)
+    assert float(stats["mean_l0"]) == pytest.approx(sae.cfg.k, abs=0.5)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available here")
+def test_compute_feature_stats_works_when_sae_is_on_mps():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to("mps")
+    sae_mps = vectors.load_sae(RELEASE, SAE_ID, layer=LAYER, d_model=768, device="mps")
+
+    stats = vectors.compute_feature_stats(
+        model, tok, sae_mps, layer=LAYER,
+        texts=["The quick brown fox jumps over the lazy dog."],
+        batch_size=1, max_length=32, center=True,
+    )
+    assert stats["frequency"].shape == (sae_mps.cfg.d_sae,)
+
+
+# --- Neuronpedia: token-level classification and cached fetch ---------------------------------
+
+@pytest.mark.parametrize("description", [
+    "the comma and other punctuation marks",
+    "instances of the indefinite article 'a'",
+    "articles and indefinite articles",  # plural -- the exact bug the trailing s? fixes
+    "the word \"the\"",
+    "line breaks and newline characters",
+    "a single capital letter at the start of a word",
+])
+def test_token_level_descriptions_are_flagged(description):
+    assert vectors.is_token_level(description) is True
+
+
+@pytest.mark.parametrize("description", [
+    "references to the Apple brand and its products",
+    "phrases expressing pain and suffering",
+    "athletic achievements, particularly records in running",
+    "references to political candidates and elections",
+])
+def test_semantic_descriptions_are_not_flagged(description):
+    assert vectors.is_token_level(description) is False
+
+
+def test_fetch_feature_uses_the_cache_without_a_network_call(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "np_cache"
+    path = cache_dir / "6-res_post_128k-oai" / "1878.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"explanations": [{"description": "cached description"}]}')
+
+    def fail_if_called(*a, **kw):
+        raise AssertionError("should not hit the network when the cache already has this file")
+
+    monkeypatch.setattr(vectors.requests, "get", fail_if_called)
+    payload = vectors.fetch_feature("gpt2-small/6-res_post_128k-oai", 1878, cache_dir)
+    assert payload["explanations"][0]["description"] == "cached description"
+
+
+def test_fetch_feature_writes_the_cache_on_a_network_hit(tmp_path, monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"explanations": [{"description": "fetched live"}]}
+
+    monkeypatch.setattr(vectors.requests, "get", lambda *a, **kw: FakeResponse())
+    monkeypatch.setattr(vectors.time, "sleep", lambda *a: None)
+
+    cache_dir = tmp_path / "np_cache"
+    payload = vectors.fetch_feature("gpt2-small/6-res_post_128k-oai", 42, cache_dir)
+    assert payload["explanations"][0]["description"] == "fetched live"
+    cached = (cache_dir / "6-res_post_128k-oai" / "42.json").read_text()
+    assert "fetched live" in cached
+
+
+def test_fetch_feature_returns_none_on_a_network_failure(tmp_path, monkeypatch):
+    def raise_error(*a, **kw):
+        raise ConnectionError("no network")
+
+    monkeypatch.setattr(vectors.requests, "get", raise_error)
+    assert vectors.fetch_feature("gpt2-small/x", 1, tmp_path / "np_cache") is None
+
+
+def test_describe_features_omits_undescribed_features(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "np_cache"
+
+    def fake_get(*a, **kw):
+        class Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"explanations": []}  # no description available
+
+        return Resp()
+
+    monkeypatch.setattr(vectors.requests, "get", fake_get)
+    monkeypatch.setattr(vectors.time, "sleep", lambda *a: None)
+    out = vectors.describe_features("gpt2-small/6-res_post_128k-oai", [1878], cache_dir)
+    assert out == {}
+
+
+def test_describe_features_classifies_token_level(tmp_path, monkeypatch):
+    cache_dir = tmp_path / "np_cache"
+    responses = {
+        1: "references to political candidates",
+        2: "the comma and other punctuation",
+    }
+
+    def fake_get(url, timeout=25):
+        index = int(url.rstrip("/").rsplit("/", 1)[-1])
+
+        class Resp:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {"explanations": [{"description": responses[index]}]}
+
+        return Resp()
+
+    monkeypatch.setattr(vectors.requests, "get", fake_get)
+    monkeypatch.setattr(vectors.time, "sleep", lambda *a: None)
+    out = vectors.describe_features("gpt2-small/6-res_post_128k-oai", [1, 2], cache_dir)
+    assert out[1]["token_level"] is False
+    assert out[2]["token_level"] is True
+
+
 def test_save_and_load_persona_vectors_round_trip(tmp_path):
     payload = {"evil": {"trait": "evil", "vector": [0.1, 0.2, 0.3], "layer": 6}}
     path = tmp_path / "persona.json"

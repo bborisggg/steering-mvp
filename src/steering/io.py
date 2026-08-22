@@ -93,13 +93,54 @@ def set_seed(seed: int) -> None:
 # Format follows from the payload type. CSV for tables because results/ is committed and must
 # stay diffable; torch for anything that is weights or activations.
 
+def _int_keyed(payload: Any) -> bool:
+    """Whether every key of this dict is a real ``int`` (not ``bool`` -- a ``bool`` is a
+    subclass of ``int`` in Python, and a dict keyed by ``True``/``False`` is not what this
+    checks for).
+
+    JSON object keys are always strings, so a dict like ``{1878: {...}}`` -- exactly what
+    ``vectors.probe_steerability`` and ``vectors.describe_features`` return, keyed by SAE
+    feature index -- silently becomes ``{"1878": {...}}`` after a save/load round trip. Every
+    downstream ``.get(feature_id, ...)`` lookup then misses, quietly returning the default
+    instead of raising: the empty-selection failure mode, not a crash. Recorded in the meta
+    sidecar at save time so :func:`run_or_load` can restore it on load.
+    """
+    return isinstance(payload, dict) and bool(payload) and all(
+        type(k) is int for k in payload
+    )
+
+
+def _restore_int_keys(payload: Any) -> Any:
+    if isinstance(payload, dict):
+        return {int(k): v for k, v in payload.items()}
+    return payload
+
+
+def _json_safe(value: Any) -> bool:
+    """Whether ``value`` can round-trip through ``json.dumps`` losslessly.
+
+    Format dispatch in :func:`_save` is by payload *type* (dict/list -> JSON), but a dict can
+    perfectly well hold tensors -- ``vectors.compute_feature_stats`` returns exactly that, a
+    dict of per-feature tensors. ``json.dumps`` on such a dict does not degrade gracefully; it
+    raises deep inside the encoder. Checked recursively so a dict-of-dicts-of-tensors is also
+    caught before ``json.dumps`` ever runs, not after.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, dict):
+        return all(_json_safe(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return all(_json_safe(v) for v in value)
+    return False
+
+
 def _save(payload: Any, stem: Path) -> Path:
     import pandas as pd
 
     if isinstance(payload, pd.DataFrame):
         path = stem.with_suffix(".csv")
         payload.to_csv(path, index=False)
-    elif isinstance(payload, (dict, list)):
+    elif isinstance(payload, (dict, list)) and _json_safe(payload):
         path = stem.with_suffix(".json")
         path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     else:
@@ -164,7 +205,8 @@ def run_or_load(
         if meta.get("hash") == digest:
             if not quiet:
                 print(f"cached  {existing.name}  ({digest})")
-            return _load(existing)
+            loaded = _load(existing)
+            return _restore_int_keys(loaded) if meta.get("int_keyed") else loaded
         diffs = _differences(meta.get("config", {}), config) or ["  (no recorded config)"]
         raise CacheMismatch(
             f"{existing.name} was produced by a different config.\n"
@@ -175,8 +217,8 @@ def run_or_load(
     payload = fn()
     path = _save(payload, stem)
     meta_path.write_text(
-        json.dumps({"hash": digest, "artifact": path.name, "config": config}, indent=2,
-                   sort_keys=True) + "\n"
+        json.dumps({"hash": digest, "artifact": path.name, "config": config,
+                   "int_keyed": _int_keyed(payload)}, indent=2, sort_keys=True) + "\n"
     )
     if not quiet:
         print(f"computed {path.name}  ({digest})")

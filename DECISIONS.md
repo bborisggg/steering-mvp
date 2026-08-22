@@ -14,14 +14,26 @@ room to guess.
 A probed SAE feature is usable if **all** of:
 
 1. its activation frequency is inside `[0.41x, 20.5x]` of `k / d_sae`;
-2. peak SAE-activation gain under an alpha sweep is `> 0.02`, restricted to alphas whose
-   perplexity stays within `4x` baseline;
+2. peak SAE-activation gain under an `r` sweep is `> 0.02`, restricted to `r` values that pass
+   **both** `ppl_ratio <= 4x` baseline **and** `dist_2 >= 0.8x` baseline;
 3. it has a Neuronpedia auto-interp description that is **not** token-level;
 4. that peak reproduces under a second generation seed.
 
 **Why in writing first:** this is the gate that defines the population every number is computed
 on. Choosing it after seeing which features the method helps is the selection effect the whole
 split exists to prevent.
+
+**Why criterion 2 needs both axes, not perplexity alone (corrected 2026-08-22, before any probe
+had run):** the first draft of this rule named only the perplexity bound. Reading the
+exploratory repo's `evaluation/steerability.py` for the probe implementation surfaced its own
+measured reason for guarding `dist_2` too: perplexity ratio and `dist_2` disagree by ~6x in
+`alpha` on its 16-feature eval set, because they fail in opposite directions -- repetition
+collapse drives perplexity *down* while word salad drives it *up*, so perplexity alone is
+directionless and passes both failure modes silently. This project's own Step 1 gate hit exactly
+this pathology (`ppl_ratio` heavy-tailed and non-monotonic across features at matched `r`, mean
+13.2x vs. median 9.6x at r=1.0), which is what prompted rereading the source before implementing
+the probe rather than after. `dist_2 >= 0.8x` is the exploratory repo's own calibrated
+threshold, not re-derived here.
 
 **Why these thresholds:** carried unchanged from the exploratory repo, where they produced 49
 usable of 256 probed (26% raw, 19% after filters 3-4). The frequency band is expressed in

@@ -100,6 +100,61 @@ def test_force_recomputes_and_rewrites_meta(sandbox):
     assert io.run_or_load("demo", {"seed": 1}, lambda: {"v": 3}, quiet=True) == {"v": 2}
 
 
+def test_int_keyed_dict_round_trips_through_json(sandbox):
+    """The trap this exists for: JSON object keys are always strings, so a naive round trip
+    would turn {1878: {...}} into {"1878": {...}} and every int-key lookup downstream would
+    silently miss instead of raising."""
+    payload = {1878: {"peak": 0.2}, 42: {"peak": 0.05}}
+    io.run_or_load("features", {"v": 1}, lambda: payload, quiet=True)
+    loaded = io.run_or_load("features", {"v": 1}, lambda: None, quiet=True)
+    assert loaded == payload
+    assert all(isinstance(k, int) for k in loaded)
+
+
+def test_string_keyed_dict_is_not_coerced(sandbox):
+    """Only genuinely int-keyed dicts get the round-trip fix -- a dict that happens to have
+    numeric-looking string keys must not be silently retyped underneath a caller."""
+    payload = {"1878": {"peak": 0.2}}
+    io.run_or_load("features", {"v": 1}, lambda: payload, quiet=True)
+    loaded = io.run_or_load("features", {"v": 1}, lambda: None, quiet=True)
+    assert loaded == payload
+    assert all(isinstance(k, str) for k in loaded)
+
+
+def test_dict_of_tensors_falls_back_to_torch_save(sandbox):
+    """The actual bug: json.dumps raises deep inside the encoder on a dict containing a
+    tensor, not gracefully -- compute_feature_stats returns exactly this shape (a dict of
+    per-feature tensors), so this must be caught by format dispatch, not by the caller
+    converting every tensor to a list before every run_or_load call."""
+    import torch
+
+    payload = {"frequency": torch.rand(8), "n_tokens": torch.tensor(1234)}
+    io.run_or_load("stats", {"v": 1}, lambda: payload, quiet=True)
+    assert (sandbox / "results" / "stats.pt").exists()
+    assert not (sandbox / "results" / "stats.json").exists()
+    loaded = io.run_or_load("stats", {"v": 1}, lambda: None, quiet=True)
+    torch.testing.assert_close(loaded["frequency"], payload["frequency"])
+    torch.testing.assert_close(loaded["n_tokens"], payload["n_tokens"])
+
+
+def test_dict_of_dicts_of_tensors_also_falls_back(sandbox):
+    """The json-safety check must recurse -- a dict of dicts (probe-shaped) with a tensor
+    buried one level down must not slip through to json.dumps and raise there instead."""
+    import torch
+
+    payload = {1878: {"peak": 0.2, "vector": torch.rand(4)}}
+    io.run_or_load("nested", {"v": 1}, lambda: payload, quiet=True)
+    assert (sandbox / "results" / "nested.pt").exists()
+
+
+def test_plain_dict_still_saves_as_json(sandbox):
+    """The fix must not regress the common case -- a JSON-safe dict still gets the readable,
+    diffable format, not torch.save."""
+    payload = {"a": 1, "b": [1, 2, 3], "c": {"nested": "ok"}}
+    io.run_or_load("plain", {"v": 1}, lambda: payload, quiet=True)
+    assert (sandbox / "results" / "plain.json").exists()
+
+
 def test_meta_records_the_config_for_provenance(sandbox):
     config = {"model": "gpt2", "layer": 6, "seed": 0, "version": 1}
     io.run_or_load("demo", config, lambda: {"v": 1}, quiet=True)

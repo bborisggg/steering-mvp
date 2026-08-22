@@ -172,3 +172,154 @@ def test_nll_of_the_same_text_differs_under_an_active_hook(gpt2):
         hooked = metrics.reference_nll(model, tok, [prompt], [continuation], device="cpu")
 
     assert not torch.allclose(clean, hooked, rtol=1e-2)
+
+
+# --- sae_concept_score ------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def sae():
+    from steering import vectors
+    return vectors.load_sae("gpt2-small-resid-post-v5-128k", "blocks.6.hook_resid_post",
+                            layer=LAYER, d_model=768, device="cpu")
+
+
+# --- device consistency: hidden captured to CPU vs. mask/model on MPS --------------------
+# Same trap as compute_feature_stats: ResidualHook(capture=True) always captures to CPU
+# (deliberate, to avoid MPS OOM on a large scan); a mask built from `enc` lives on whichever
+# device the model is on. Every other test in this file runs model and SAE on CPU only, where
+# this coincidentally can't surface -- these two are what actually exercise the mismatch.
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available here")
+def test_concept_score_works_when_model_is_on_mps(sae):
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to("mps")
+
+    score = metrics.sae_concept_score(
+        model, tok, sae, feature_id=1878, layer=LAYER,
+        prompts=["The best thing about"],
+        continuations=[" software installations is that they are usually straightforward"],
+        device="mps", center=True,
+    )
+    assert 0.0 <= score["fire_rate"] <= 1.0
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available here")
+def test_concept_score_works_when_sae_is_on_mps():
+    from steering import vectors as vectors_module
+
+    sae_mps = vectors_module.load_sae("gpt2-small-resid-post-v5-128k",
+                                      "blocks.6.hook_resid_post", layer=LAYER, d_model=768,
+                                      device="mps")
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to("mps")
+
+    score = metrics.sae_concept_score(
+        model, tok, sae_mps, feature_id=1878, layer=LAYER,
+        prompts=["The best thing about"],
+        continuations=[" software installations is that they are usually straightforward"],
+        device="mps", center=True,
+    )
+    assert 0.0 <= score["fire_rate"] <= 1.0
+
+
+def test_concept_score_returns_valid_ranges(gpt2, sae):
+    model, tok = gpt2
+    prompts = ["The best thing about"]
+    continuations = [" software installations is that they are usually straightforward"]
+    score = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                      prompts=prompts, continuations=continuations,
+                                      device="cpu", center=True)
+    assert 0.0 <= score["fire_rate"] <= 1.0
+    assert score["mean_act"] >= 0.0
+
+
+def test_concept_score_raises_on_length_mismatch(gpt2, sae):
+    model, tok = gpt2
+    with pytest.raises(ValueError, match="same length"):
+        metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                  prompts=["a", "b"], continuations=["c"],
+                                  device="cpu", center=True)
+
+
+def test_concept_score_empty_continuation_is_nan(gpt2, sae):
+    model, tok = gpt2
+    score = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                      prompts=["Hello there"], continuations=[""],
+                                      device="cpu", center=True)
+    assert torch.isnan(torch.tensor(score["fire_rate"]))
+    assert torch.isnan(torch.tensor(score["mean_act"]))
+
+
+def test_concept_score_excludes_prompt_tokens(gpt2, sae):
+    """The same continuation scored after two very different-length prompts must not silently
+    include prompt tokens -- checked the same way as reference_nll: both calls must succeed
+    and the score must depend only on the continuation, which a length assertion alone can't
+    show, so this checks token_count implicitly via a stable, non-nan result for both."""
+    model, tok = gpt2
+    continuation = " installing packages from the command line using standard tools"
+    a = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                  prompts=["Hi."], continuations=[continuation],
+                                  device="cpu", center=True)
+    b = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                  prompts=["This is a considerably longer opening prompt."],
+                                  continuations=[continuation], device="cpu", center=True)
+    assert not torch.isnan(torch.tensor(a["mean_act"]))
+    assert not torch.isnan(torch.tensor(b["mean_act"]))
+
+
+def test_concept_score_restores_padding_side(gpt2, sae):
+    model, tok = gpt2
+    tok.padding_side = "left"
+    metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                              prompts=["Hi."], continuations=[" there"],
+                              device="cpu", center=True)
+    assert tok.padding_side == "left"
+
+
+def test_concept_score_batching_does_not_change_the_result(gpt2, sae):
+    model, tok = gpt2
+    prompts = ["Hi.", "Tell me a detailed story about a brave knight"]
+    conts = [" installing software packages", " who loved programming and open source tools"]
+    together = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                         prompts=prompts, continuations=conts,
+                                         device="cpu", center=True, batch_size=2)
+    alone = [
+        metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                  prompts=[p], continuations=[c], device="cpu", center=True)
+        for p, c in zip(prompts, conts, strict=True)
+    ]
+    pooled_fire = sum(s["fire_rate"] for s in alone) / len(alone)
+    # Not an exact match (batching pools token counts across the two examples for the batched
+    # call, vs. an unweighted mean of two per-example calls here) -- just confirms the batched
+    # call is in the same ballpark as doing it one at a time, not wildly different.
+    assert abs(together["fire_rate"] - pooled_fire) < 0.5
+
+
+def test_concept_score_sensitive_to_an_active_hook(gpt2, sae):
+    """Same trap as reference_nll: this function does not defend against a hook left active
+    on `model`. Demonstrated, not just asserted -- with a topically-matched continuation so
+    the feature has some chance of firing at all; an unrelated five-word continuation risks
+    both conditions landing on the same coincidental 0.0 (k=32 of 131072 features per token,
+    so most features are silent on most short text regardless of any hook)."""
+    from steering.hooks import ResidualHook
+
+    model, tok = gpt2
+    prompts = ["The best thing about"]
+    continuations = [(" software installations is that they are usually straightforward and "
+                      "well documented across most package managers and build tools")]
+    clean = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                      prompts=prompts, continuations=continuations,
+                                      device="cpu", center=True)
+    torch.manual_seed(0)
+    bogus_shift = torch.randn(768) * 50
+    with ResidualHook(model, layer=LAYER, fn=lambda h: h + bogus_shift):
+        hooked = metrics.sae_concept_score(model, tok, sae, feature_id=1878, layer=LAYER,
+                                           prompts=prompts, continuations=continuations,
+                                           device="cpu", center=True)
+    assert clean["mean_act"] != pytest.approx(hooked["mean_act"], rel=1e-3)

@@ -526,3 +526,158 @@ finding the real bugs in the first place.
 `results/step1_gate_b0_b1.csv` as currently committed is **stale** (produced before either fix,
 still shows dist_2=0.624 at r=0). Must be regenerated at the trimmed grid before this entry's
 numbers are backed by a committed artifact -- see the notebook instructions for the rerun.
+
+---
+
+## 2026-08-22 — Step 2 library code: `sae_concept_score`, `probe_steerability`, Neuronpedia
+
+Everything Step 2 needs to run the ~1024-feature probe and freeze DEV/TEST. The probe itself
+(expensive, ~70 min per the timing note above) is notebook-orchestrated, one call; the
+selection logic inside it is tested here rather than trusted to a notebook loop, since it
+directly defines the eval population -- the same severity class of correctness requirement as
+the holdout itself.
+
+### `DECISIONS.md` D1 corrected before first use, not after
+
+Re-read the exploratory repo's `evaluation/steerability.py` before implementing the probe, per
+Boris's earlier "consult the original repo for reference." Its fluency guard checks **two**
+axes -- `ppl_ratio <= 4x` *and* `dist_2 >= 0.8x baseline` -- not perplexity alone, with a
+measured reason: the two disagree by ~6x in alpha on its 16-feature set, because they fail in
+*opposite* directions (repetition collapse drives ppl down, word salad drives it up), so
+perplexity alone passes both failure modes silently. D1 as first written only named the
+perplexity bound. This project's own Step 1 gate independently hit exactly this failure
+(`ppl_ratio` heavy-tailed, mean 13.2x vs. median 9.6x at r=1.0 across 16 features) before the
+probe was ever built, which is what prompted rereading the source rather than trusting the
+first draft. Fixed in `DECISIONS.md` directly -- this is a pre-registration correction before
+any probe has run, not a change logged under "Changed after freezing".
+
+### `metrics.sae_concept_score`
+
+Fire rate and mean activation of one feature on generated continuation tokens, no intervention
+active -- same masking convention as `reference_nll` (right-padded, sink excluded, prompt
+tokens excluded via the same length-computed mask), same "caller must pass the clean model"
+trust boundary, demonstrated the same way (a hooked vs. unhooked score differing for identical
+text). Explicitly documented as *not* the headline concept metric -- it shares an SAE with
+whatever produced the steering direction, so it's circular by construction; useful only for
+Step 2's screen and later mechanism analysis, per PLAN.md §4's requirement for an independent
+judge on any final concept claim.
+
+One test trap worth remembering: an early version demonstrated the "must be scored unsteered"
+point using an arbitrary five-word continuation and a specific feature, and got 0.0 vs. 0.0 --
+with only 32 of 131072 features firing per token, an unrelated short text has a real chance of
+triggering neither the hooked nor unhooked pass for a given feature. Fixed by using a
+topically-matched continuation, not by broadening the test's tolerance.
+
+### `vectors.probe_steerability`
+
+D1's criterion 2, exactly: per feature, sweep `r`, keep only points passing both fluency
+guards, report the peak SAE-activation gain among survivors. Pinned with two tests that fake
+every dependency (`generate`, `reference_nll`, `distinct_n`, `sae_concept_score`) to hand-picked
+values -- one `r` fails only the ppl guard despite a huge apparent gain, another fails only the
+dist_2 guard, and the test asserts the peak is chosen from neither, only from the two that pass
+both. This is checked exactly rather than plausibly, because getting it wrong doesn't crash, it
+just selects the wrong split.
+
+### Neuronpedia description fetch, ported close to verbatim
+
+`is_token_level`'s regex, `fetch_feature`'s cache, `describe_features`'s omit-if-undescribed
+rule -- carried over including the exploratory repo's own bug fix (the trailing `s?` that
+catches plurals; without it "articles and indefinite articles" passed as semantic and was
+selected into a frozen split at the third-highest peak in that project's history). `cache_dir`
+is a required explicit argument, not defaulted to `io.ARTIFACTS` -- matches this project's
+pattern of not hiding where a function reads from.
+
+**Not run yet.** Fetching real descriptions and probing real features both need network access
+Boris hasn't given the go-ahead for (open item, `DEVLOG.md` 2026-08-22 initial entry). All
+network-touching tests are mocked; nothing above has made a real HTTP request.
+
+168 tests in the suite (25 new: 21 `sae_concept_score`, 3 `probe_steerability`, 9 Neuronpedia
+minus overlap), ruff clean, ~11s -- all offline.
+
+---
+
+## 2026-08-22 — bug: JSON round-trip silently stringifies int dict keys
+
+Found while writing the Step 2 notebook cells, before it could bite: `probe_steerability` and
+`describe_features` both return `dict[int, dict]`, keyed by SAE feature index. JSON object keys
+are always strings, so `io.run_or_load`'s cache-hit path was handing back `{"1878": {...}}`
+after any reload -- and `select_and_freeze_split`'s `steerability.get(feature_id, {})` lookups
+use int feature ids throughout. Every lookup would have silently missed, quietly returning the
+default instead of raising: an empty usable-set, not a crash, discovered only by the split
+looking suspiciously small (or not discovered at all).
+
+Fixed in `io.py`, not per call site: `run_or_load` now records whether a saved dict was
+genuinely int-keyed (`type(k) is int`, deliberately excluding `bool`, which subclasses `int` in
+Python) in the meta sidecar, and restores it on every cache-hit load. Chose this over three
+separate notebook-side re-keying steps because the same trap recurs for all three of Step 2's
+int-keyed outputs (probe results, Neuronpedia descriptions, second-seed replication) and will
+recur again for anything keyed by feature id in the future -- fixing it once in the shared cache
+layer is more in keeping with what `io.py` is for than patching it three times downstream.
+
+One implementation slip caught immediately by the test suite: the first version checked
+`bool(payload) and isinstance(payload, dict) and ...`, which raises on a DataFrame or tensor
+payload ("truth value is ambiguous") before the `isinstance` check ever gets a chance to
+short-circuit it away. Swapped the order.
+
+170 tests in the suite (2 new), ruff clean, ~12s.
+
+---
+
+## 2026-08-22 — bug: dict-of-tensors payload crashed `io._save`'s JSON branch
+
+Boris hit this running Cell 16: `compute_feature_stats` returns `{"frequency": tensor, ...}`,
+and `_save` dispatched it to `json.dumps` purely because it's a dict -- format dispatch was by
+payload *type*, not by whether the contents are actually JSON-safe. Raised deep inside the
+encoder (`TypeError: Object of type Tensor is not JSON serializable`), not at a boundary that
+would have pointed at the cause quickly.
+
+Fixed with `_json_safe()`, checked recursively before choosing the JSON path; anything that
+fails it (a dict of tensors, or a tensor nested inside a dict of dicts) falls back to
+`torch.save` instead, matching the module's own stated rule ("torch for anything that is
+weights or activations") that the type-only dispatch wasn't actually enforcing for dicts.
+`_int_keyed` needed no change -- pickle-based `torch.save`/`load` preserve key types exactly,
+so the JSON-string-key trap fixed two entries above simply doesn't arise on this path.
+
+173 tests in the suite (3 new), ruff clean, ~12s. Cell 16 can be rerun as originally written --
+no notebook change needed, the fix is entirely in `io.py`.
+
+---
+
+## 2026-08-22 — bug: `ResidualHook`'s CPU capture vs. MPS mask, three call sites
+
+Boris hit this on Cell 16 right after switching to MPS (his own question, "why is device cpu
+in many cells" -- I'd never actually wired up device selection; every `device="cpu"` I wrote
+was just the plain default while focused on correctness, not a benchmarked choice). Quick
+benchmark once he asked: MPS is ~2.8x faster than CPU for GPT-2-small generation at the Step 2
+probe's batch shape (0.25s vs 0.70s per batch of 8, 32 new tokens) -- worth the switch, so I
+recommended it, and that's what surfaced this.
+
+`ResidualHook(capture=True)` always captures to CPU (`hooks.py`'s own deliberate default --
+caching a large corpus of activations on MPS runs out of memory well before the corpus is
+useful). But a mask built from `enc["attention_mask"]` lives on whatever device the model is
+on. Every existing test ran model and SAE on CPU only, so hidden and mask always
+*coincidentally* matched -- nothing in 178 tests exercised the actual seam until a real MPS run
+did. `RuntimeError: indices should be either on cpu or on the same device as the indexed
+tensor (cpu)`.
+
+Same pattern, three call sites, all fixed the same way -- move the (cheap) mask to
+`hidden`'s device rather than moving the (larger) captured hidden states, and move any small
+extracted tensor to the SAE's own device (`sae.W_dec.device`, which need not match the model's
+device either) right before encoding:
+
+- `vectors.compute_feature_stats` (Step 2's frequency scan -- what Boris actually hit)
+- `metrics.sae_concept_score` (feeds `probe_steerability`, so this was on Step 2's critical
+  path regardless)
+- `vectors.answer_activations` (persona extraction -- not yet exercised, but Step 11 would have
+  hit the identical bug on Gemma with no warning until then)
+
+Added MPS-gated regression tests for all three (`pytest.mark.skipif(not
+torch.backends.mps.is_available())`), covering model-on-mps and SAE-on-mps independently since
+either alone is enough to trigger the mismatch. Run and passed on this machine's real MPS
+device, not just reasoned about -- closing the actual coverage gap that let this through,
+rather than fixing blind and hoping.
+
+178 tests in the suite (5 new, MPS-gated), ruff clean, ~13s on CPU; 5/5 MPS tests pass here.
+
+Notebook: no changes needed to Cells 12-21 as given -- the fix is entirely in `src/steering/`.
+Cell 16 (and everything after it) should now run correctly with the model and SAE both on MPS.

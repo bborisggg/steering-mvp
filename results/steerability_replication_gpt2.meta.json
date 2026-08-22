@@ -1,0 +1,13 @@
+{
+  "artifact": "steerability_replication_gpt2.json",
+  "config": {
+    "layer": 6,
+    "model": "gpt2",
+    "n_prompts": 32,
+    "n_survivors": 131,
+    "seed": 1,
+    "version": 1
+  },
+  "hash": "680dc09614d6ad05",
+  "int_keyed": true
+}

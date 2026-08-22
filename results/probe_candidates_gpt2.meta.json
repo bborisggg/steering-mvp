@@ -1,0 +1,13 @@
+{
+  "artifact": "probe_candidates_gpt2.json",
+  "config": {
+    "freq_hi": 0.005004829115932807,
+    "freq_lo": 0.00010009658231865614,
+    "n_candidates": 1024,
+    "n_in_band": 41461,
+    "seed": 0,
+    "version": 1
+  },
+  "hash": "98738db2b517fb71",
+  "int_keyed": false
+}
