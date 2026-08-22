@@ -1,0 +1,13 @@
+{
+  "artifact": "nll_judge_calibration_gpt2.csv",
+  "config": {
+    "judge_model": "gemma4:31b",
+    "model": "gpt2",
+    "n_examples": 33,
+    "rubric": "coherence",
+    "seed": 0,
+    "version": 1
+  },
+  "hash": "296dd22a5c6b2b0e",
+  "int_keyed": false
+}

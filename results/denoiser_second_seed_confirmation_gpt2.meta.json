@@ -1,0 +1,18 @@
+{
+  "artifact": "denoiser_second_seed_confirmation_gpt2.csv",
+  "config": {
+    "families": [
+      "D1",
+      "D4"
+    ],
+    "seeds": [
+      0,
+      1
+    ],
+    "split_fingerprint": "ce65a9496b253ceb",
+    "steps": 5000,
+    "version": 1
+  },
+  "hash": "cb46fdaa9c579d64",
+  "int_keyed": false
+}

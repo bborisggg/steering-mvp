@@ -681,3 +681,339 @@ rather than fixing blind and hoping.
 
 Notebook: no changes needed to Cells 12-21 as given -- the fix is entirely in `src/steering/`.
 Cell 16 (and everything after it) should now run correctly with the model and SAE both on MPS.
+
+---
+
+## 2026-08-22 — `judge.py`: ported closely, live-tested against the real `gemma4:31b`
+
+Step 3 needs this to calibrate reference NLL against judge coherence, so it jumped ahead of
+`corruptions.py`/`denoiser.py` in PLAN.md's own module list -- consistent with how Step 1
+skipped straight to `interventions.py`/`generate.py`/`metrics.py` without those two either.
+
+Close port of the exploratory repo's `evaluation/judge.py` (Boris: "consult previous repos
+where needed"), kept close deliberately -- three of its design choices were each earned by a
+real failure and are not worth re-deriving:
+
+- **`think=False` by default.** A thinking judge model burns hundreds of tokens reasoning
+  before answering a single integer; under a small `num_predict` it truncates mid-thought and
+  returns an *empty* string -- silent, not an exception.
+- **Non-string `concept` raises `TypeError`.** The exact historical bug: a metrics dict once
+  reached the concept rubric, formatted into the prompt as its own repr, and the judge
+  dutifully scored *that* -- plausible numbers for a question nobody asked, flattening a whole
+  sweep.
+- **Two independent rubric calls, never combined.** Coherence and concept/trait are always
+  separate calls; the exploratory repo measured trait=100, coherence=0 on the same Gemma text
+  at high alpha, which a single blended score would have called a success.
+
+All four rubrics carried over (coherence/concept for GPT-2's continuation style, needed now;
+chat_coherence/trait for Gemma's chat style, needed at Step 11) rather than trimming to what's
+immediately used -- they're prompt-template strings, not extra machinery, and re-deriving their
+anchor wording later with less context would be worse than keeping it now.
+
+Confirmed `gemma4:31b` is present locally (`ollama list`) before writing a single test against
+it. Five live tests hit the real model -- an obviously-coherent and an obviously-word-salad
+case for `coherence`, an obviously-saturated and an obviously-unrelated case for `concept`, and
+one small real `score_many` batch checking threaded order preservation -- all passed on the
+first run, ~11s total including the offline suite. Skipped rather than failed if Ollama isn't
+reachable (checked once at collection time, not per test).
+
+209 tests in the suite (31 new), ruff clean, ~21s total including live judge calls.
+
+---
+
+## 2026-08-22 — Step 3: B0/B1/B2 on DEV, judge calibration, and an open finding on B2
+
+### Gate: passed
+
+35 DEV concepts, `r` in `[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]` (Step 1's validated grid), B0 shared
+baseline + B1/B2 per concept. Clear, monotonic concept-quality tradeoff for both arms:
+`concept_mean_act` 0.015 -> 0.27 (B1) as `r` rises, `dist_2` 0.96 -> 0.88, `repetition_4` stays
+under 0.006 throughout -- a world away from the greedy-decoding-era baseline (0.25 degenerate),
+confirming the earlier fixes hold up on a wider concept set, not just the 16 reference features.
+
+### Judge calibration: strong, correctly-signed
+
+33-example quality-stratified sample, scored on the `coherence` rubric against the real
+`gemma4:31b`: Pearson r=-0.619 (p=0.0001), Spearman r=-0.766 (p<0.0001) between reference NLL
+and judge coherence. Spearman noticeably stronger than Pearson -- consistent with a monotonic
+but non-linear relationship (raw NLL is unbounded, judge coherence is capped at 100, so the
+relationship should saturate at the high-NLL tail rather than staying linear). Good enough to
+trust reference NLL as Step 8's cheap proxy.
+
+### Open finding: B2 loses to B1 on both axes at r >= 0.6, mechanism not yet identified
+
+At matched `r`, B2 (norm-matched) is not just differently positioned on the frontier from B1 --
+it is **dominated**, worse on both ppl and concept simultaneously, and the gap grows with `r`:
+
+| r | B1 ppl | B2 ppl | B1 concept | B2 concept |
+|---|---|---|---|---|
+| 0.4 | 106.5 | 104.1 | 0.103 | 0.104 |
+| 0.6 | 250.7 | 262.7 | 0.181 | 0.158 |
+| 0.8 | 486.5 | 571.4 | 0.232 | 0.193 |
+| 1.0 | 734.9 | 915.2 | 0.275 | 0.201 |
+
+Tracks almost exactly at r=0.2-0.4, diverges unfavourably for B2 past that. Contradicts
+`interventions.py`'s own stated assumption ("concept lives mostly in direction; restoring the
+norm recovers much of the fluency a plain push costs") -- true at low r, false at high r here.
+
+Two mechanisms proposed and directly measured, both refuted:
+
+1. **Amplification** (the rescale factor `c = ||h|| / ||h+delta||` exceeding 1, so B2 makes the
+   push *bigger* rather than smaller). Measured both on a single clean forward pass and, more
+   importantly, on the real autoregressive rollout (instrumented hook, prefill + every decode
+   step, 12 DEV directions): `c` stays well below 1 throughout and *falls* as `r` grows
+   (median 0.93 at r=0.4 -> 0.68 at r=1.0). B2 damps more at higher r, not less. Refuted.
+
+2. **Directional/magnitude inconsistency** (norm-matching recomputed fresh at every position
+   producing an erratic, compounding correction rather than a steady one, unlike B1's literally
+   constant `delta`). Measured the actual applied correction's cosine similarity to the
+   intended direction and its magnitude CV across the same real rollout: cosine stays high
+   (mean 0.96 at r=0.6 -> 0.92 at r=1.0, never below 0.74) and magnitude CV stays low
+   (0.044 -> 0.074) -- B2's correction is well-aligned and fairly consistent, just smaller than
+   B1's. Refuted.
+
+So the applied correction is smaller, well-aligned, and consistent by every measure checked --
+which should make B2 gentler on *both* axes than B1, not worse on both. It isn't. A candidate
+third mechanism, not yet tested: GPT-2's downstream layers may read residual-stream *norm*
+itself as a signal (elevated norm correlating with salience/confidence in some transformer
+literature), so B1's "abnormal but consistent" shift may be easier for later layers to handle
+than B2's "normal-looking but directionally wrong" one -- testable via per-layer sensitivity
+downstream of layer 6, not yet done.
+
+**Decision: logged, not chased further right now.** Two clean, reproducible refutations is a
+real result on its own (rules out the two most obvious stories), and Step 3's actual gate does
+not depend on resolving it -- B2 remains a valid, if now more interesting, mandatory control.
+Worth returning to at Step 9 (mechanism analysis: what does the denoiser repair, and does it
+handle B2's failure mode differently from B1's).
+
+209 tests remain the current count (no library changes this entry -- diagnostics were run
+standalone, not added to the test suite, since they measure a specific finding rather than pin
+a reusable behaviour).
+
+---
+
+## 2026-08-22 — `denoiser.py`: `cache_activations`, Step 4
+
+Only the caching utility so far -- the `ResidualMLPDenoiser` architecture itself is Step 5's
+job, once there's a corruption to train it against.
+
+Design question worth being explicit about: does the cache store centered/scaled activations,
+or raw ones? The denoiser's own forward pass is `D(x, s) = x + f(N(x), e(s))` -- `N(x)` *is*
+`spaces.encode`, called inside `D()`. Baking centering/scaling into the cache instead would mean
+the transform runs once, at cache time, and never again -- the opposite of PLAN.md Step 4's own
+requirement ("training and inference must pass through the same spaces.py transform"), which
+means the *same call*, at both training and inference, not merely the same formula applied at
+two different times. So the cache is raw: pinned with an exact-identity test against a live
+hook capture, not just a shape check.
+
+Reuses the exact device-safety pattern from the compute_feature_stats/sae_concept_score fix
+(mask moved to `hidden`'s device, not the other way round) from the start, rather than
+discovering the same bug a fourth time -- confirmed on real MPS hardware, not just reasoned
+about.
+
+`exclude_sink=True` by default: every intervention already skips the sink (D4), so training the
+denoiser on it would teach it to reconstruct a position it will never be asked to touch.
+
+9 new tests (218 in the suite), ruff clean, ~2.5s including a real MPS run.
+
+### Corpus size for the real cache: reusing Step 2's, not fetching a new one
+
+Step 2's frequency-band scan already processed 3000 Pile-10k documents (`max_length=64`) into
+186,699 real, non-sink tokens (`feature_stats_gpt2_l6.meta.json`) -- same texts, same
+tokenization settings work directly for `cache_activations` too, and it does strictly less
+per-batch work (no SAE encode), so it should be at least as fast as that already-measured run.
+Reusing it avoids a second corpus fetch and gives ~187k distinct activation vectors, ample for a
+two-block residual MLP.
+
+---
+
+## 2026-08-22 — `corruptions.py`: D1-D4, holdout guard tested against a hand-crafted bypass
+
+Close port of the exploratory repo's `data/corruptions.py` (Boris: "consult previous repos
+where needed") for D1 (Gaussian) and the Rank1/StructuredRank1 machinery, **not** for D2 --
+PLAN.md's D2 is `sqrt(1-beta)*h + sqrt(beta)*eps`, a variance-preserving SDE-style corruption,
+which is a different family from the exploratory repo's own "C2" (a plain linear interpolant
+`t*h + (1-t)*eps`) despite the similar name. Implemented D2 from PLAN.md's formula directly,
+checked against a hand computation with a monkeypatched RNG (same standard `reference_nll` was
+held to) rather than only a shape check.
+
+### Why D3 and D4 collapsed into one base class instead of two independent ones
+
+The exploratory repo's C4 (fixed pool) and C7 (full pool) needed separate pool-extension logic
+because its `train_features` was a separately-stored, size-limited list -- widening the pool
+past that list meant explicitly drawing more non-evaluation features and checking disjointness
+again. This project's `VectorSplit.train_pool()` is already "every index not in dev/test," the
+full ~131k-entry complement, computed structurally rather than stored -- so D3 (`FixedPoolRank1`)
+and D4 (`FullPoolRank1`) differ only in whether that pool gets subsampled once (D3, seeded,
+frozen for the run) or used whole (D4, resampled every call). One shared base
+(`StructuredRank1`) does the actual work; the two subclasses are a few lines each. A concrete
+payoff from the earlier `VectorSplit` redesign, not just a cleaner API.
+
+### The holdout guard, tested against more than the happy path
+
+`StructuredRank1.__init__` asserts `pool_indices` disjoint from `holdout` explicitly, even
+though `split.train_pool()` already guarantees this structurally -- defense in depth against a
+wrong *implementation* of the pool-building logic, not merely documentation of a property the
+type already has. Two tests exercise this directly rather than trusting the guarantee:
+
+- construct `StructuredRank1` with a **hand-crafted** `pool_indices` list that bypasses
+  `split.train_pool()` entirely and includes a holdout index -- must raise;
+- construct it with a **tampered holdout set** that disagrees with what `train_pool()` would
+  actually exclude -- must still raise, on the assumption that some *other* bug upstream could
+  hand it a wrong holdout, not just a wrong pool.
+
+Both raise as required. `FixedPoolRank1`/`FullPoolRank1` are exercised end-to-end through the
+real `VectorSplit`-based construction path a training script would actually use, not only
+through the lower-level base class.
+
+`Rank1`'s rho and `Gaussian`'s sigma both sample log-uniformly over the same `[0.05, 3]`
+(PLAN.md §3), sharing one `_log_uniform_t` helper for the `t_for_r` conditioning map (DECISIONS
+D3). `VariancePreserving.t_for_r` is an honest `clamp(r, 0, 1)` placeholder, explicitly flagged
+as unvalidated in its own docstring -- there is no principled r->beta correspondence the way
+there is for the additive families, and DECISIONS D3 already records what happens when an
+unvalidated map like this gets trusted silently (wrong by 2-3x, undiscovered until someone went
+looking).
+
+29 new tests (247 in the suite), ruff clean, ~24s.
+
+---
+
+## 2026-08-22 — `train_denoiser`: the training loop, and a test that demanded the impossible
+
+Completes Step 5's library code: sample a minibatch from the cached pool (CPU-resident by
+`cache_activations`'s own design), move only that minibatch to `device`, corrupt it, compute
+`denoising_loss`, step. Generic over D1-D4 by construction -- nothing here branches on
+corruption type, since `Corrupted`'s `x`/`target`/`t` interface is what every corruption family
+already produces (tested explicitly across all four, plus `Rank1`'s bare/sphere variant).
+
+Two generators, deliberately separate: index sampling on a CPU generator (which examples get
+drawn), corruption noise on a `device`-resident one (`corruptions._check_generator` requires it
+to match the tensor it operates on, and that tensor is the minibatch, already moved). Confirmed
+`torch.Generator(device="mps")` actually works on this machine before relying on it, rather than
+assuming.
+
+### A test that asked for something the problem couldn't give
+
+First draft of the convergence test used `synthetic_pool` -- i.i.d. Gaussian rows with no
+structure to exploit beyond simple shrinkage -- and demanded `final_loss < 0.5 * initial_loss`.
+Failed at 0.161 against a 0.107 target. Before assuming the training loop was broken: this
+synthetic problem has a computable Bayes-optimal floor (clean and noise are independent
+zero-mean Gaussians, so the MMSE estimate is `x/(1+sigma^2)`), measured directly at loss ~0.15
+against an identity baseline of ~0.216 -- and the network was already converging to within
+range of that floor by ~150 steps. The 0.5x threshold asked for a loss *below the problem's own
+information-theoretic limit*, achievable by no denoiser, trained or not. Fixed to 0.8x, an
+achievable bound that still rules out "training did nothing." The training loop itself needed
+no changes -- it was already working close to optimally on the first real run.
+
+268 tests in the suite (9 new), ruff clean, ~21s.
+
+---
+
+## 2026-08-22 — `evaluate_denoiser` and a real speed measurement before the first-pass run
+
+`evaluate_denoiser` is what Step 5's "eliminate clearly weak families" decision actually reads,
+so it gets the same treatment as `probe_steerability`: a tested function, not ad hoc notebook
+code, since getting it wrong doesn't crash -- it silently eliminates the wrong corruption
+family. Pinned that a trained model measurably beats an untrained (identity) one on genuinely
+held-out data (a different seed's draw than training used), which is the one property that
+actually matters: this function has to measure real denoising quality, not just return a
+number that happens to be finite.
+
+Measured training speed at the real scale (`d_model=768`, synthetic data of matching shape)
+before picking step counts for the actual GPT-2 run: **~5s per 2000 steps on MPS**, ~28s on
+CPU. PLAN.md's own budget ("GPT-2 denoiser selection: <1 hour of training") is not remotely a
+binding constraint at this speed -- four first-pass trainings plus a second-seed confirmation of
+the top two could run in well under 3 minutes total even at 5000+ steps each. Chose a generous
+step count for the real run on that basis, not a time-pressured minimal one.
+
+276 tests in the suite (8 new), ruff clean, ~21s.
+
+---
+
+## 2026-08-22 — Step 5 first pass: D3's memorisation confound caught before it misled anything
+
+First-pass training (one seed, real GPT-2 activations, 5000 steps, ~5s each on MPS):
+
+| family | own val_loss | dev-direction generalization |
+|---|---|---|
+| D1 | 0.2022 | 0.1269 |
+| D2 | 0.2927 | 0.2246 |
+| D3 | 0.0200 | 0.1575 |
+| D4 | 0.1988 | 0.1207 |
+
+The first number Boris ran (`own val_loss`) made D3 look ~10x better than everything else.
+It wasn't real: D3's validation corruption still drew from the *same fixed 256-direction pool*
+used in training, so a low loss there measures memorisation of that pool, not denoising ability
+-- exactly the failure `corruptions.py`'s own docstring already named, quoting the exploratory
+repo's measured ratio (~400 for a fixed 256-pool against 1.5-6 for a resampled one). This
+project's own accumulated history flagged the mechanism before the number was ever produced;
+the number then confirmed it needed exactly that flag.
+
+Fixed by evaluating all four **already-trained** models under one **shared** corruption built
+from `split.dev` directions (never in any training pool -- legitimate for a method-selection
+decision; `split.test` stays untouched) at the validated deployment range `r in [0.05, 1.0]`, not
+each family's own training corruption. This also incidentally fixes a second problem the first
+table had: D1/D2/D3/D4 were each scored under a *different* corruption shape with a different
+intrinsic difficulty floor, so their own numbers were never directly comparable to begin with.
+
+On the fair metric, D3 drops from best to third of four (0.1575, worse than D1 and D4) --
+losing outright once it faces a direction it never saw. D2 is worst on both metrics, consistent
+with being a harder, differently-shaped corruption (destructive interpolation vs. additive) and
+the one family whose r->t conditioning map was already flagged unvalidated
+(`VariancePreserving.t_for_r`'s own docstring).
+
+**Decision: D1 and D4 advance to the second-seed confirmation; D2 and D3 eliminated.** D4 edges
+D1 by a real but modest margin (~5%), mechanistically sensible -- D4's fresh-every-step rank-1
+push most closely matches the deployment perturbation shape, the same reasoning the exploratory
+repo gave for its own best-performing corruption (C7, D4's direct analogue). Provisional per
+PLAN.md ("do not freeze a corruption family from one seed") -- the D1-vs-D4 ranking specifically
+still needs the second seed; the D2/D3 elimination does not, since PLAN.md's first pass exists
+for exactly that cut.
+
+---
+
+## 2026-08-22 — Step 5 winner: D4 (rank-1, full pool), tie broken by mechanistic prior
+
+Second-seed confirmation flipped rank between seeds: D4 won seed 0 (0.1207 vs D1's 0.1269),
+D1 won seed 1 (0.1252 vs D4's 0.1280). Means: D4 0.1243, D1 0.1261 -- a 1.4% gap, well inside
+the noise a single rank flip already demonstrates.
+
+**Decision: D4.** Not from these numbers, which cannot distinguish the two -- from the same
+mechanistic prior that put D4 in the top two to begin with: it is the only family whose
+corruption shape matches deployment (a fresh rank-1 push along a real decoder direction every
+step, no fixed pool to memorise), matching the exploratory repo's own conclusion about its
+direct analogue (C7). A statistical tie does not overturn that prior; it means this evidence
+can't move it either way, so the tie is broken by the reason D4 was a candidate at all rather
+than by chasing a third seed for a ~1% difference.
+
+Both D1 and D4 checkpoints are saved (`denoiser_d1_seed{0,1}.pt`, `denoiser_d4_seed{0,1}.pt`,
+`artifacts/`) in case this decision needs revisiting.
+
+Moving to Step 6: pool-size check for D4 specifically (64, 256, 1024, full -- PLAN.md's four
+points), now that rank-1 corruption is confirmed among the winners.
+
+---
+
+## 2026-08-22 — Step 6: pool-size check, diversity saturates around 1024
+
+| pool | n directions | dev_generalization |
+|---|---|---|
+| 64 | 64 | 0.1683 |
+| 256 | 256 | 0.1575 |
+| 1024 | 1024 | 0.1187 |
+| full | 130,967 | 0.1207 |
+
+Monotonic improvement 64->1024 (~30% relative), then flat 1024->full -- the 0.002 difference
+is smaller than the noise floor already measured in Step 5's seed-to-seed D1/D4 comparison
+(~0.006-0.007). The full-pool row reproduces D4's already-measured seed-0 result almost exactly
+(0.1207 both times), a free consistency check on the whole pipeline: same corruption, same
+config, same number.
+
+**Finding: corruption-direction diversity helps up to roughly 1024 directions, then saturates.**
+Does not reverse Step 5's choice of full-pool D4 (still at least as good as anything tested,
+and PLAN.md's own named definition of D4) -- but explains *why* full-pool isn't wasted effort
+without being strictly necessary either: D4 sits comfortably past the point where more
+directions would help, matching the general shape of the exploratory repo's own memorisation
+curve (steep gains at small pools, diminishing beyond a few thousand).
+
+Step 6 complete -- PLAN.md's own "four points are enough." Step 7 (freeze the method) is next.

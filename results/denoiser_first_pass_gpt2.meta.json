@@ -1,0 +1,19 @@
+{
+  "artifact": "denoiser_first_pass_gpt2.csv",
+  "config": {
+    "batch_size": 256,
+    "families": [
+      "D1",
+      "D2",
+      "D3",
+      "D4"
+    ],
+    "lr": 0.001,
+    "seed": 0,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "steps": 5000,
+    "version": 1
+  },
+  "hash": "cd5962142acba076",
+  "int_keyed": false
+}

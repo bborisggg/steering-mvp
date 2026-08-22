@@ -1,0 +1,13 @@
+{
+  "artifact": "denoiser_generalization_check_gpt2.csv",
+  "config": {
+    "n_examples": 4096,
+    "rho_max": 1.0,
+    "rho_min": 0.05,
+    "seed": 999,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "version": 1
+  },
+  "hash": "51b2a81598135233",
+  "int_keyed": false
+}

@@ -1,0 +1,17 @@
+{
+  "artifact": "denoiser_pool_size_check_gpt2.csv",
+  "config": {
+    "pool_sizes": [
+      "64",
+      "256",
+      "1024",
+      "None"
+    ],
+    "seed": 0,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "steps": 5000,
+    "version": 1
+  },
+  "hash": "eb7c99d6e97e1d13",
+  "int_keyed": false
+}
