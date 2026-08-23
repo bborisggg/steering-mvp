@@ -1,0 +1,20 @@
+{
+  "artifact": "persona_vectors_gemma2_2b_it.json",
+  "config": {
+    "layer": 12,
+    "model": "google/gemma-2-2b-it",
+    "n_extract": 10,
+    "seed": 0,
+    "traits": [
+      "evil",
+      "sycophantic",
+      "impolite",
+      "apathetic",
+      "optimistic",
+      "humorous"
+    ],
+    "version": 1
+  },
+  "hash": "85e1c4a93d33dac6",
+  "int_keyed": false
+}

@@ -104,6 +104,33 @@ def sae_encode(sae, x: torch.Tensor, chunk: int = 4096) -> torch.Tensor:
     return torch.cat(out) if len(out) > 1 else out[0]
 
 
+@torch.no_grad()
+def sae_reconstruction_ev(sae, x: torch.Tensor, chunk: int = 4096) -> float:
+    """Fraction of variance in ``x`` that ``sae`` reconstructs -- ``1 - FVU``.
+
+    Exists for Step 11: Gemma has no it-tuned Gemma Scope release, only a pt-trained one, so
+    using its decoder rows as D4's corruption pool means applying a pt-trained SAE to it-model
+    activations -- a real train/eval mismatch that must be measured, not assumed away. Gate on
+    this before trusting the pool (a threshold around 0.6 is what the exploratory lineage used;
+    not hardcoded here since "how much mismatch is tolerable" is a call for the caller, not this
+    function).
+
+    Reuses :func:`sae_encode`'s chunking (same MPS silent-corruption trap applies to decode).
+    """
+    total_ss, resid_ss, n = 0.0, 0.0, 0
+    mean = x.mean(dim=0, keepdim=True)
+    for i in range(0, x.shape[0], chunk):
+        batch = x[i : i + chunk]
+        features = sae_encode(sae, batch, chunk=chunk)
+        recon = sae.decode(features)
+        resid_ss += float((batch - recon).pow(2).sum())
+        total_ss += float((batch - mean).pow(2).sum())
+        n += batch.shape[0]
+    if total_ss == 0:
+        return float("nan")
+    return 1.0 - resid_ss / total_ss
+
+
 def steering_directions(sae, feature_ids: list[int], normalize: bool = True) -> torch.Tensor:
     """Decoder directions for the given features, as ``(n_features, d_model)``.
 

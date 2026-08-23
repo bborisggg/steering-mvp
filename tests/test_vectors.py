@@ -119,6 +119,56 @@ def test_encode_raises_on_a_violated_topk_invariant():
         vectors.sae_encode(FakeSAE(), torch.randn(4, 768))
 
 
+# --- sae_reconstruction_ev (Step 11: gate the pt-on-it SAE mismatch before trusting it) --------
+
+class _IdentitySAE:
+    """encode/decode are both the identity -- perfect reconstruction, EV must read 1.0."""
+
+    class cfg:
+        k = 10_000  # generous: never trips sae_encode's sparsity guard
+        d_sae = 10_000  # accessed unconditionally by sae_encode's limit computation
+
+    def encode(self, x):
+        return x
+
+    def decode(self, features):
+        return features
+
+
+class _MeanOnlySAE:
+    """decode always returns the batch mean -- exactly the "explains nothing beyond the mean"
+    baseline the EV formula is defined against, so EV must read 0.0, not merely "low"."""
+
+    class cfg:
+        k = 10_000
+        d_sae = 10_000
+
+    def encode(self, x):
+        return x
+
+    def decode(self, features):
+        return features.mean(dim=0, keepdim=True).expand_as(features)
+
+
+def test_ev_is_one_for_perfect_reconstruction():
+    x = torch.randn(200, 16) * 5 + 3
+    ev = vectors.sae_reconstruction_ev(_IdentitySAE(), x)
+    assert ev == pytest.approx(1.0, abs=1e-5)
+
+
+def test_ev_is_zero_when_reconstruction_is_just_the_mean():
+    x = torch.randn(200, 16) * 5 + 3
+    ev = vectors.sae_reconstruction_ev(_MeanOnlySAE(), x)
+    assert ev == pytest.approx(0.0, abs=1e-5)
+
+
+def test_ev_is_stable_across_chunk_sizes(sae):
+    x = torch.randn(37, 768) * 90
+    whole = vectors.sae_reconstruction_ev(sae, x, chunk=1000)
+    chunked = vectors.sae_reconstruction_ev(sae, x, chunk=8)
+    assert whole == pytest.approx(chunked, abs=1e-6)
+
+
 # --- steering_directions ----------------------------------------------------------------------
 
 def test_directions_are_unit_norm_by_default(sae):

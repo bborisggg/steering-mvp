@@ -1,6 +1,10 @@
 # Large or regenerable. results/ is deliberately NOT here: every number in the report
 # traces to a committed file under it.
 artifacts/
+
+# Working notes, not part of the public deliverable.
+DEVLOG.md
+DECISIONS.md
 .venv/
 __pycache__/
 *.py[cod]

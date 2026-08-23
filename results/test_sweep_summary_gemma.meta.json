@@ -1,0 +1,33 @@
+{
+  "artifact": "test_sweep_summary_gemma.csv",
+  "config": {
+    "layer": 12,
+    "max_new_tokens": 160,
+    "model": "google/gemma-2-2b-it",
+    "n_extract": 10,
+    "prompt": "neutral",
+    "r_grid": [
+      0.0,
+      0.05,
+      0.1,
+      0.15,
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0
+    ],
+    "seed": 0,
+    "traits": [
+      "evil",
+      "sycophantic",
+      "impolite",
+      "apathetic",
+      "optimistic",
+      "humorous"
+    ],
+    "version": 1
+  },
+  "hash": "ab97e366ca5b13f8",
+  "int_keyed": false
+}
