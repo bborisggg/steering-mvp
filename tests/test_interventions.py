@@ -179,3 +179,106 @@ def test_b1_installed_on_a_real_hook_reaches_decode_steps(v):
             outputs[name] = model.generate(**batch, max_new_tokens=10, do_sample=False,
                                            pad_token_id=tok.eos_token_id)
     assert not torch.equal(outputs["b1"], outputs["b0"])
+
+
+# ==============================================================================================
+# DenoisedSteering: D(h + alpha*v) -- steer, then denoise. Step 8's headline arm.
+# ==============================================================================================
+
+def make_untrained_denoiser(d_model=8, activation_scale=90.0):
+    from steering import denoiser as denoiser_module
+
+    return denoiser_module.ResidualMLPDenoiser(d_model=d_model, activation_scale=activation_scale,
+                                               center=True)
+
+
+def test_denoised_steering_derives_t_from_r_via_the_corruption_description():
+    """DECISIONS D3: t must come from the corruption family's own inverse map, not be assumed.
+    Passing a fixed t=1 regardless of r is the silent misuse D3 names explicitly."""
+    from steering import corruptions
+
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    description = corruptions.Rank1(rho_min=0.05, rho_max=3.0).describe()
+    iv = interventions.DenoisedSteering(v, r=0.5, scale=90.0, model=model,
+                                        corruption_description=description)
+    expected_t = corruptions.t_for_r(description, 0.5)
+    assert iv.t == pytest.approx(expected_t)
+
+
+def test_denoised_steering_reduces_to_additive_steering_when_untrained():
+    """Zero-init denoiser is exactly the identity (denoiser.py's own guarantee), so steering
+    through an untrained one must match plain AdditiveSteering exactly -- a strong, exact check
+    that the composition order (steer THEN denoise) is right, not the reverse."""
+    from steering import corruptions
+
+    torch.manual_seed(0)
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    description = corruptions.Rank1().describe()
+
+    b1 = interventions.AdditiveSteering(v, r=0.7, scale=90.0)
+    denoised = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                              corruption_description=description)
+
+    hidden = torch.randn(3, 5, 8) * 90.0  # [batch, seq, d] -- a prefill-shaped input
+    out_b1 = b1(hidden)
+    out_denoised = denoised(hidden)
+    torch.testing.assert_close(out_denoised, out_b1, atol=1e-5, rtol=0)
+
+
+def test_denoised_steering_skips_the_sink_like_every_other_intervention():
+    from steering import corruptions
+
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    iv = interventions.DenoisedSteering(v, r=0.5, scale=90.0, model=model,
+                                        corruption_description=corruptions.Rank1().describe())
+    hidden = torch.randn(2, 4, 8) * 90.0
+    out = iv(hidden)
+    torch.testing.assert_close(out[:, 0, :], hidden[:, 0, :])
+
+
+def test_denoised_steering_actually_changes_output_once_trained():
+    """A denoiser with a nonzero head must produce something different from plain B1 -- proves
+    the model is actually being called, not silently bypassed."""
+    from steering import corruptions
+
+    torch.manual_seed(0)
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    with torch.no_grad():
+        model.out.weight.copy_(torch.eye(*model.out.weight.shape) * 0.3)
+        model.out.bias.zero_()
+    description = corruptions.Rank1().describe()
+
+    b1 = interventions.AdditiveSteering(v, r=0.7, scale=90.0)
+    denoised = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                              corruption_description=description)
+    hidden = torch.randn(3, 5, 8) * 90.0
+    assert not torch.allclose(denoised(hidden), b1(hidden))
+
+
+def test_denoised_steering_installed_on_a_real_hook_reaches_decode_steps():
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    from steering import corruptions, hooks
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval()
+    batch = tok(["The weather today is"], return_tensors="pt")
+
+    direction = torch.randn(768)
+    denoiser_model = make_untrained_denoiser(d_model=768, activation_scale=90.0)
+    description = corruptions.Rank1().describe()
+    iv = interventions.DenoisedSteering(direction, r=1.0, scale=90.0, model=denoiser_model,
+                                        corruption_description=description)
+    b0 = interventions.NoSteering()
+
+    outputs = {}
+    for name, arm in (("denoised", iv), ("b0", b0)):
+        with hooks.ResidualHook(model, layer=6, fn=arm):
+            outputs[name] = model.generate(**batch, max_new_tokens=10, do_sample=False,
+                                           pad_token_id=tok.eos_token_id)
+    assert not torch.equal(outputs["denoised"], outputs["b0"])

@@ -86,3 +86,35 @@ class NormMatchedSteering(AdditiveSteering):
         original = hidden.norm(dim=-1, keepdim=True)
         steered = hidden + self.delta
         return steered * (original / steered.norm(dim=-1, keepdim=True).clamp_min(1e-6))
+
+
+class DenoisedSteering(AdditiveSteering):
+    """``D(h + alpha*v)`` -- steer, then denoise. Step 8's headline arm: the whole point of
+    this project's denoiser.
+
+    ``t`` is derived from ``r`` via the corruption family's own inverse map
+    (``corruptions.t_for_r``), not assumed -- DECISIONS D3 names passing a raw or fixed ``t``
+    regardless of the deployed ``r`` as a silent, severe misuse: a t-conditioned denoiser
+    defaults to maximum denoising at every strength if the map is skipped.
+
+    Args:
+        v, r, scale: as ``AdditiveSteering`` -- the steering push applied before denoising.
+        model: a trained (or, for testing, untrained) ``ResidualMLPDenoiser``.
+        corruption_description: the training corruption's ``describe()`` output, exactly what
+            ``t_for_r`` needs and no more -- this class never needs the SAE or the split that
+            originally built the corruption, only the small dict a checkpoint carries.
+    """
+
+    id = "denoised"
+
+    def __init__(self, v: torch.Tensor, r: float, scale: float, model,
+                corruption_description: dict):
+        from steering import corruptions
+
+        super().__init__(v, r, scale)
+        self.model = model
+        self.t = corruptions.t_for_r(corruption_description, r)
+
+    def apply(self, hidden: torch.Tensor) -> torch.Tensor:
+        steered = super().apply(hidden)
+        return self.model(steered, t=self.t)

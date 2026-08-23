@@ -216,14 +216,21 @@ def test_sampling_is_not_batch_invariant_even_with_a_fixed_seed(gpt2):
     reproducible run to run, but it does **not** make one prompt's output independent of which
     other prompts happen to share its batch -- unlike greedy, where no randness is drawn and
     batch composition genuinely cannot matter. Documented here so it is not mistaken for a bug
-    later (e.g. Step 8's per-example bootstrap re-running at a different batch_size)."""
+    later (e.g. Step 8's per-example bootstrap re-running at a different batch_size).
+
+    Uses two prompts of the SAME tokenized length deliberately: after the exact-length-grouping
+    fix (see the module docstring's sink-position incident), prompts of *different* lengths are
+    never actually batched together any more, so a short/long pair like the one this test used
+    before no longer demonstrates the caveat at all -- they end up in separate length-groups
+    and become batch-invariant as a side effect of the fix. Two same-length prompts still
+    genuinely share a batch, so the caveat this test exists to pin is still real for them."""
     model, tok = gpt2
-    short, long_ = "Hi.", "Tell me a detailed story about a brave knight"
-    together = generate.generate(model, tok, [short, long_], interventions.NoSteering(),
+    a, b = "Hi there today.", "She looked at the"  # both tokenize to length 4
+    together = generate.generate(model, tok, [a, b], interventions.NoSteering(),
                                  layer=LAYER, device="cpu", max_new_tokens=10, batch_size=2)
-    alone_short = generate.generate(model, tok, [short], interventions.NoSteering(),
-                                    layer=LAYER, device="cpu", max_new_tokens=10)
-    assert together.texts[0] != alone_short.texts[0]
+    alone_a = generate.generate(model, tok, [a], interventions.NoSteering(),
+                                layer=LAYER, device="cpu", max_new_tokens=10)
+    assert together.texts[0] != alone_a.texts[0]
 
 
 def test_restores_padding_side(gpt2):
@@ -250,6 +257,33 @@ def test_uses_left_padding_internally_regardless_of_caller_state(gpt2):
 
 
 # --- intervention reset between batches -------------------------------------------------------
+
+def test_batching_with_mixed_lengths_does_not_corrupt_the_sink_position(gpt2):
+    """The actual bug this guards, found in a real Step 8 run: under left-padding, position 0
+    is a PAD token for every row shorter than the batch's longest prompt, not the true sink --
+    so every Intervention's own 'skip position 0' logic misses the real sink for those rows and
+    lets an ordinary steering push (or worse, a trained denoiser never shown anything near that
+    scale) reach a position carrying ~30-40x the median activation norm. `NoSteering` can't
+    catch this -- it touches nothing regardless of where the sink is assumed to be -- so this
+    uses a real push and compares a short prompt generated alone against the same prompt
+    generated in a batch with a much longer one. Before the fix, these differ (the short
+    prompt's real sink gets steered when batched, skipped when alone); after grouping by exact
+    tokenized length so no batch is ever padded, they must match exactly."""
+    model, tok = gpt2
+    torch.manual_seed(0)
+    v = torch.randn(768)
+
+    short = "Hi."
+    long_ = "Tell me a very long and detailed story about a brave knight on a quest"
+
+    alone = generate.generate(model, tok, [short], interventions.AdditiveSteering(v, r=1.5, scale=90.0),
+                              layer=LAYER, device="cpu", max_new_tokens=10, temperature=0.0)
+    together = generate.generate(model, tok, [short, long_],
+                                 interventions.AdditiveSteering(v, r=1.5, scale=90.0),
+                                 layer=LAYER, device="cpu", max_new_tokens=10, batch_size=2,
+                                 temperature=0.0)
+    assert together.texts[0] == alone.texts[0]
+
 
 def test_resets_a_stateful_intervention_once_per_batch(gpt2):
     """A position-dependent intervention (like the exploratory repo's decaying steering) must

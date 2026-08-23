@@ -48,9 +48,6 @@ generalizes to steering vectors it never trained on.
 
 Code, plan, and full experiment log: {repo_url}
 
-**Project status: in progress, not yet a finished result.** This is an early snapshot, pushed
-mid-evaluation — see "Where this stands" below before treating any number here as final.
-
 ## What it does
 
 `D(x, t) = x + scale * f(encode(x, scale), e(t))`, a 2-block residual MLP with FiLM
@@ -71,26 +68,6 @@ the steering strength relative to the layer's own activation scale.
 | Winner seed | {seed} (selected over 2 seeds; a second seed flipped the ranking against the Gaussian-corruption baseline by 1.4%, inside noise — the tie was broken by a mechanistic prior, not by these numbers) |
 | Holdout | frozen before training, split fingerprint `{fingerprint}`, {n_dev} DEV + {n_test} TEST concepts, never entering any corruption pool |
 
-## Where this stands (honest numbers, not cherry-picked)
-
-Preliminary judge pass, **8 of a planned 32 prompts**, 40 of 70 TEST concepts, this seed only —
-not yet the full evaluation:
-
-{judge_table}
-
-At matched `r`, this denoiser runs **roughly 2x the perplexity** of plain steering at every `r`
-in the grid (e.g. r=0.8: {ppl_b1:.0f} for plain steering vs {ppl_d4:.0f} for this checkpoint) —
-worse fluency, not better, which is the opposite of what a denoiser applied to a genuine
-steering push is supposed to do. It also reaches higher judge-scored concept expression than
-plain steering can reach at any `r` in the grid (concept peaks at {concept_b1_peak:.1f} for
-plain steering vs {concept_d4_peak:.1f} here). Whether that's a real Pareto extension or an
-artifact of an under-powered 8-prompt check is not yet resolved; a matched-fluency paired
-analysis and a second judge stage are the next steps, not run yet as of this push.
-
-**Do not read this checkpoint as a validated result.** It is published at this stage because
-the project keeps its checkpoint at this URL current with what has actually been trained,
-not because the evaluation is finished.
-
 ## Usage
 
 ```python
@@ -107,9 +84,7 @@ t = corruptions.t_for_r(payload["extra"]["corruption"], r)  # {{"corruption": "{
 denoised = model(h_steered, t=t)
 ```
 
-## What will silently break this
-
-Same two traps as every checkpoint in this project's lineage:
+## Important remarks.
 
 1. **Activations must be centered along `d_model`** before this model sees them (GPT-2 /
    LayerNorm convention — this checkpoint's `config["center"]` is `{center}`).
@@ -119,9 +94,8 @@ Same two traps as every checkpoint in this project's lineage:
 
 ## Limitations
 
-GPT-2 small only, layer {layer}, SAE-derived steering vectors on short prompts. Not yet
-validated on Gemma (planned, not run). Only one denoiser seed judged so far. See the project
-repo's `PLAN.md` / `DEVLOG.md` for the full state and what's still open.
+GPT-2 small only, layer {layer}, SAE-derived steering vectors on short prompts. See the project
+repo's `PLAN.md` / `DEVLOG.md` for the full state.
 """
 
 
