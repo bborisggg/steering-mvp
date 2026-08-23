@@ -1,0 +1,18 @@
+{
+  "artifact": "gemma_prompt_judge.csv",
+  "config": {
+    "judge_model": "gemma4:31b",
+    "n_extract": 10,
+    "traits": [
+      "evil",
+      "sycophantic",
+      "impolite",
+      "apathetic",
+      "optimistic",
+      "humorous"
+    ],
+    "version": 1
+  },
+  "hash": "0c715dde3d210369",
+  "int_keyed": false
+}
