@@ -113,7 +113,32 @@ At PLAN.md Step 7 the config hash is written here, with the date. After that poi
 may change corruption family, pool size, architecture, training distribution, hook, `r` grid,
 positions, metrics, or the judge subset.
 
-Config hash: *(not yet frozen)*
+**Frozen 2026-08-22.**
+
+| | |
+|---|---|
+| Corruption | D4 — rank-1, resampled fresh every step from the full non-holdout dictionary |
+| Pool | full `train_pool()` (~130,967 features) |
+| Architecture | `ResidualMLPDenoiser`: d=768, hidden_mult=2, t_embed_dim=128, `center=True` |
+| Training | steps=5000, batch_size=256, lr=1e-3, rho∈[0.05,3] log-uniform, winner seed=0 |
+| Hook | GPT-2 small, layer 6 |
+| `r` grid | `[0.0, 0.2, 0.4, 0.6, 0.8, 1.0]` |
+| Positions | all except the attention sink |
+| Metrics | reference NLL, dist-1/2/3, repetition-4, `sae_concept_score` (mechanism only), judge coherence + concept (headline) |
+| Judge subset | 40 of 70 TEST concepts, seed 0, `split_fingerprint` `ce65a9496b253ceb` |
+| Judge `r` values | `[0.2, 0.4, 0.6, 0.8]` |
+
+Config hash: `49db404c4e308bc0` (`results/frozen_method_config_gpt2.json`).
+Judge subset hash: `acde5e375f7dd7c0` (`results/judge_subset_gpt2.json`, concept IDs and `r`
+values committed there).
+
+Provisional choices this freeze carries forward, each already logged with its own reasoning:
+D3 and D2 eliminated at Step 5 (D3's own-corruption validation loss was a memorisation artifact,
+caught and corrected before it could mislead the family choice); D1-vs-D4 was a statistical tie
+across two seeds, broken by the mechanistic prior that D4's corruption shape matches deployment,
+not by the numbers themselves (DEVLOG 2026-08-22); Step 6 showed diversity saturates around 1024
+directions, so the full pool is not doing more work than a much smaller one would, but is not
+worse either.
 
 ---
 

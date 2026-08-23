@@ -1017,3 +1017,253 @@ directions would help, matching the general shape of the exploratory repo's own 
 curve (steep gains at small pools, diminishing beyond a few thousand).
 
 Step 6 complete -- PLAN.md's own "four points are enough." Step 7 (freeze the method) is next.
+
+---
+
+## 2026-08-22 — Step 7: method frozen
+
+`DECISIONS.md` D6 completed with the real values from the notebook run (not placeholders):
+config hash `49db404c4e308bc0`, judge subset hash `acde5e375f7dd7c0` (40 of 70 TEST concepts,
+seed 0, `r` in `[0.2, 0.4, 0.6, 0.8]`). D4/full-pool/the architecture and training config as
+already decided; carries forward D3/D2's elimination and the tie-broken-by-prior D1-vs-D4 call,
+both already logged with their own reasoning rather than restated as bare facts here.
+
+No changes to `src/` this entry -- purely a provenance record, read directly from
+`results/frozen_method_config_gpt2.json` and `results/judge_subset_gpt2.json`, both already on
+disk from Boris's own notebook run.
+
+Moving to Step 8 (final GPT-2 test, 3 seeds, all TEST concepts, headline B1/B2/D1/D4 comparison,
+judge on the frozen 40x4 subset, Pareto + paired bootstrap). `stats.py` is still an empty stub
+and Step 8 is the first place this project needs it -- building it next, tests first.
+
+---
+
+## 2026-08-22 — `stats.py` and `interventions.DenoisedSteering`: the last two pieces before Step 8's run
+
+Two gaps closed before any Step 8 cell could actually run.
+
+**`stats.py`.** Ported `bootstrap_ci`/`paired_test`/`holm` from the exploratory repo's
+`evaluation/significance.py` closely; generalised `concept_at_fluency`/`matched_fluency_*` from
+`evaluation/pareto.py` into direction-agnostic `value_at_target`/`matched_comparison`/
+`matched_band` (swap which column is `x` and which is `y` to answer "quality at matched
+concept" or "concept at matched quality" with the same function -- PLAN.md Step 8 asks for
+both). Kept the one piece of design that mattered most: `matched_band`'s interval is built by
+the *same* within-unit-differencing procedure `matched_comparison` uses at a single point,
+evaluated on a grid instead -- not a separately-bootstrapped mean front per arm, differenced
+afterward, which the source measured as 1.4x wider for a specific, mechanical reason (resampling
+shifts which units define each arm's mean front *before* interpolation runs, so the two arms'
+interpolation error stops cancelling). Dropped the source's Cousineau-Morey/variance-components
+machinery -- built for a many-arm, many-trait report; this project compares four methods.
+
+Test fixture bug caught immediately: `matched_band` requires >= 4 units for a meaningful
+bootstrap (the source's own threshold, kept as-is), but the first draft of `make_front_df()`
+only provided 3 -- three tests failed with a stale hardcoded unit count carried over after the
+fixture grew to 6. Not a bug in the function; the guard did exactly what it should.
+
+**`interventions.DenoisedSteering`.** The actual gap: nothing applied a trained denoiser as a
+steering intervention. `D(h + alpha*v)`, with `t` derived from `r` via `corruptions.t_for_r`
+(DECISIONS D3 -- a fixed or skipped `t` is the silent misuse D3 names explicitly). Checked
+against an exact identity: with an untrained (zero-init) denoiser this must reduce to plain
+`AdditiveSteering` exactly, since `D(x,t)=x` at init by construction -- a strong, exact
+composition-order check (steer then denoise, not the reverse) rather than a shape test.
+
+306 tests in the suite (30 new: 25 stats, 5 DenoisedSteering), ruff clean, ~21s.
+
+Step 8's run cells are next -- everything it needs now exists and is tested.
+
+---
+
+## 2026-08-22 — MAJOR BUG: left-padding misplaced the attention sink under batched generation
+
+Found in a real Step 8 run: D4's headline TEST-set ppl came back at 8,444-16,962 (r=0.6-1.0)
+against B1's 282-902 at the same r -- catastrophic, and getting *worse* with `r`, alongside
+*higher* dist_2 than B1 (0.99 vs 0.89). High diversity + catastrophic perplexity is the
+word-salad signature. Generated text confirmed it: near-identical garbage tokens ("Tuc",
+"Bitcoin", "Shara", "Medium Moon") recurred across a dozen *different* steering directions --
+the actual feature barely mattered, which meant the bug was direction-independent, not a
+per-feature problem.
+
+### Root cause, confirmed by direct measurement
+
+`generate.generate()` left-pads a batch of different-length prompts (needed so
+`generated[:, prompt_len:]` slices the continuation correctly for every row). Every
+`Intervention`'s sink-skip logic assumes position 0 is the attention sink and always skips it.
+Checked directly: with the real 32 neutral prompts (lengths 4-5 tokens) batched together,
+**23 of 32 rows have a PAD token at position 0**, not the sink -- the real sink for those rows
+sits at index 1 or later, gets no skip protection, and is steered/denoised like an ordinary
+token. The sink carries ~30-40x the median activation norm (measured back in Step 1). Feeding
+that into `spaces.encode` and a denoiser trained *exclusively* on non-sink-scale activations
+(the cache explicitly excludes it) pushes the MLP 30x outside anything it was trained on --
+plausibly explaining the catastrophic, unstable output. B1/B2's corrections are small/bounded
+relative to an already-huge outlier, so the same misapplication there is comparatively benign,
+which is why B0/B1/B2's numbers looked reasonable throughout Steps 1 and 3 despite carrying the
+same underlying bug the whole time.
+
+Confirmed the mechanism by testing a single unpadded prompt in isolation (perfectly coherent
+output, stable norms) against the same feature inside a real padded 32-prompt batch
+(catastrophic). Checked the old repo for reference: its `skip_sink` flag defaulted to `False`
+and -- per this project's own first DEVLOG entry -- was never enabled in any of its actual runs.
+That sidesteps this exact class of bug by never attempting to skip anything, which is not a fix
+worth copying (D4 was deliberately trained without ever seeing the sink, so correctly skipping
+it at inference is the right choice) -- it just explains why the old repo never hit this.
+
+### Fix: group every batch to a single exact tokenized length
+
+Confirmed via search that "sequence bucketing" (grouping similar-length sequences to reduce
+padding) is the standard technique for this class of problem, not a workaround --
+[PyTorch BatchSampler for bucketing by length](https://gist.github.com/TrentBrick/bac21af244e7c772dc8651ab9c58328c),
+[bucket_by_sequence_length tutorial](https://medium.com/analytics-vidhya/tutorial-on-bucket-by-sequence-length-api-for-efficiently-batching-nlp-data-while-training-20d8ef5219d7).
+The usual form still tolerates some padding within a bucket (an efficiency optimisation); this
+project's positional-correctness requirement cannot tolerate any, so `generate.generate()` now
+groups by **exact** tokenized length before batching -- `tokenizer(..., padding=True)` becomes a
+no-op on every batch it builds, so position 0 is the true sink for every row, always.
+
+Regression test written and confirmed to **fail against the pre-fix code** before the fix
+landed (not just written and hoped to be correct): compares a short prompt generated alone
+against the same prompt generated in a batch with a much longer one, using a real steering push
+(`NoSteering` can't catch this -- it touches nothing regardless of where the sink is assumed to
+be). One existing test's premise became obsolete as a direct, *good* side effect of the fix:
+`test_sampling_is_not_batch_invariant...` used a short/long pair to demonstrate that sampling
+isn't batch-invariant, but different-length prompts are no longer ever batched together at all
+now, so that pair became batch-invariant as a side effect. Fixed to use two same-length prompts,
+which still genuinely share a batch and still exhibit the real (unrelated, expected) caveat.
+
+### What needs rerunning and what doesn't
+
+Checked which steps actually call `generate.generate()` versus operate on cached activations
+directly, since only the former could have been affected:
+
+| Step | Uses `generate.generate()`? | Rerun? |
+|---|---|---|
+| 1 (B0/B1 gate) | Yes | **Yes** -- cheap, and B1's own numbers, while probably only mildly off, are worth having clean |
+| 2 (probe + split) | Yes, inside `probe_steerability` (B1-only, no denoiser) | **No** -- see below |
+| 3 (DEV sweep + judge) | Yes | **Yes** |
+| 4 (activation cache) | No | No |
+| 5/6 (train/evaluate denoiser) | No -- `train_denoiser`/`evaluate_denoiser` sample raw cached activations directly, never generate text | No -- checkpoints are unaffected and do not need retraining |
+| 7 (freeze) | No | No -- nothing about the frozen *choices* changed |
+| 8 (final test) | Yes, and this is where the denoiser exposed it | **Yes** -- the one that matters most |
+
+**Step 2 is deliberately not being rerun.** Its fluency guard used only B1-style additive
+steering (no denoiser), so by the same reasoning that kept B0/B1/B2 looking reasonable
+throughout, its effect there is bounded, not catastrophic. Re-running the probe would very
+likely shift *which* borderline features pass the fluency guard by a small amount -- and
+PLAN.md is explicit that the split, once frozen, is not revisited ("do not revisit the split
+later"), for exactly the reason that re-deciding it after any downstream result would be the
+selection effect the whole holdout exists to prevent. Re-running Steps 1/3/8 costs little and
+directly fixes numbers already known to be wrong; re-running Step 2 would cost a full
+re-freeze cascading through every step after it, to correct an effect that -- unlike Step 8's --
+was never observed to be more than mild.
+
+307 tests in the suite (2 new: the regression test, plus one existing test's premise fixed
+rather than removed), ruff clean, ~25s.
+
+---
+
+## 2026-08-22 — the sink/padding bug: root cause, fix, and a systematic audit for the same pattern
+
+### What happened
+
+Step 8's full TEST sweep produced catastrophic, direction-independent word salad for every
+denoised arm -- mean ppl above 15,000 at r=1.0 (D1) and above 16,000 (D4), against a few
+hundred for B1/B2 at the same r. The same garbled tokens ("Tuc", "Bitcoin", "Shara", "Medium
+Moon") recurred across completely different steering directions, which was the tell: the
+specific concept barely mattered, so the bug was not in any one corruption or direction.
+
+### Root cause
+
+`Intervention.__call__` skips the sink by slicing off index 0 (`hidden[:, :1, :]`) and applying
+`apply()` only to the rest -- correct under the assumption that index 0 is always the true
+first token. `generate.generate()` left-pads (needed so `generated[:, prompt_len:]` slices the
+continuation correctly across a batch of different-length prompts). Under left-padding, index 0
+is a genuine token only for the batch's *longest* prompt; every shorter row has a **pad token**
+at index 0, with its real first token -- the attention sink, carrying ~30-40x the median
+activation norm -- sitting further in, un-skipped. Measured directly: 23 of 32 rows in the
+actual neutral-prompt batch have a pad token at position 0. For B1/B2 this is a mild extra
+perturbation on an already-huge outlier; fed into a denoiser that was never trained on anything
+within 30x of its normal input scale, it produced numerically wild, garbage corrections that
+then poisoned every subsequent generated token through the KV cache.
+
+A single-prompt manual test (no padding at all) with the exact same feature and `r` produced
+completely coherent text, which was the first clue this was a batching artifact, not a model or
+training problem. Confirmed decisively: `enc["attention_mask"][row][0] == 0` for the majority
+of rows in a real batch.
+
+Checked whether the exploratory repo had already solved this: its `skip_sink` flag defaulted to
+`False` and, per this project's own earlier inherited-facts note, was never enabled in any of
+its actual runs -- it sidestepped the bug by never attempting to skip anything, not by handling
+padding correctly. Not a fix worth copying; D4 was deliberately trained without ever seeing the
+sink; skipping it at inference is the right choice, so it needed to be done correctly, not
+abandoned.
+
+### Fix
+
+Researched the standard technique first (web search: "sequence bucketing" -- grouping batches
+by length is well-established, e.g. https://gist.github.com/TrentBrick/bac21af244e7c772dc8651ab9c58328c,
+https://github.com/huggingface/transformers/issues/26072) -- confirmed this is the right shape
+of fix, not a hack. `generate.generate()` now groups prompts by **exact** tokenized length
+(not merely similar -- the usual bucketing tolerates some in-bucket padding, which this
+project's positional correctness requirement cannot) before batching, so `tokenizer(...,
+padding=True)` is a no-op on every batch it builds: nothing to pad, so position 0 is the true
+sink for every row, always. Output order is preserved via explicit index tracking rather than
+relying on batch order.
+
+Regression test added (`test_batching_with_mixed_lengths_does_not_corrupt_the_sink_position`)
+using a real steering push -- `NoSteering` can't catch this, since it touches nothing regardless
+of where the sink is assumed to be. Confirmed the test fails against the pre-fix code (exactly
+as predicted) before confirming it passes against the fix. One existing test
+(`test_sampling_is_not_batch_invariant_even_with_a_fixed_seed`) needed updating: it used a
+short/long prompt pair specifically to demonstrate that sampling isn't batch-invariant, but
+after the fix those two prompts are never actually batched together any more (different
+lengths -> different length-groups), so the caveat it existed to pin no longer applies to that
+pair -- a good side effect of the fix, not a regression. Rewritten with two same-length prompts,
+which still genuinely share a batch and still exhibit the real caveat.
+
+Verified end to end against the exact case that first exposed the bug: the same 12 TEST
+features at r=0.6 and r=1.0 that produced ppl 5,000-28,000 before the fix now produce
+ppl 380-1,200 (r=0.6) and 1,100-3,900 (r=1.0) -- comparable to B1/B2's own range at the same r,
+not an order of magnitude beyond it.
+
+### Systematic audit for the same pattern elsewhere
+
+Checked every function in `src/steering/` that reads position-indexed activations or installs
+an intervention via `ResidualHook(fn=...)`. `generate.generate()` was the only real call site
+with an intervention installed on batched, potentially-padded sequences (confirmed via grep --
+the only other `ResidualHook(..., fn=...)` in the codebase is a docstring example in
+`hooks.py`). Every other function either forces right-padding explicitly
+(`compute_feature_stats`, `cache_activations`, `sae_concept_score` -- right-padding makes
+"position 0 is the sink" true for every row, the mirror-image reason `generate.generate()`
+needs left-padding) or excludes the whole prompt region rather than assuming index 0 specifically
+(`vectors.answer_activations`, used for Gemma persona extraction -- slices everything before
+`prompt_len`, never tries to treat index 0 of the padded batch as special). No other latent
+instance of this pattern found.
+
+Found one related, smaller issue during the same audit: the notebook setup cells compute
+`scale = spaces.activation_scale(hook.captured[0], exclude_sink=True)` without passing
+`attention_mask`, so trailing pad tokens (present under the tokenizer's default right-padding,
+harmless for the sink-skip question but not for the *value* of the median) silently entered the
+scale computation. Measured: 92.3 with the mask correctly applied vs. 95.1 without, a ~3%
+difference on the neutral-prompt batch -- real, but small next to the sink bug, and since every
+compared arm shares the same (slightly biased) scale uniformly, relative comparisons between
+methods are unaffected; only the absolute `r`-to-push mapping drifts a few percent, within the
+seed-to-seed noise already characterized in Step 5 (1.4-5%). Worth fixing in future setup cells
+(pass `attention_mask=enc["attention_mask"]`); not worth invalidating anything already computed.
+
+### What this does and doesn't invalidate
+
+Step 5/6's denoiser family selection (`evaluate_denoiser`) never touched `generate.generate()`
+or any hook-installed intervention at all -- it trains and evaluates directly against cached
+activations. D4's selection as the winning corruption family is unaffected by this bug.
+
+Steps 1 and 3 did run through the buggy `generate.generate()`, with B1/B2 only (the denoiser
+did not exist yet at Step 1, and Step 3's DEV sweep predates this fix). Given B1/B2's relative
+insensitivity to a misapplied push on an already-huge outlier (established above), and given
+Step 3's B2-loses-to-B1 finding has now independently reproduced on the corrected Step 8 TEST
+data, logged as a caveat rather than a reason to rerun Steps 1/3 -- the one concretely
+falsifiable claim from that period already survived a clean re-measurement.
+
+Step 8's own cheap-axis sweep was rerun clean by Boris after deleting the contaminated results;
+current numbers (see the following table) show D1/D4 in the same order of magnitude as B1/B2
+at every r, and the B2-vs-B1 pattern replicating on 70 TEST concepts, not just the original 35
+DEV concepts.
+
+209 -> 307 tests across this incident's fixes, ruff clean.

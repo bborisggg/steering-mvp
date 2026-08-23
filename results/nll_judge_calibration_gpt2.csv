@@ -1,36 +1,36 @@
 method,r,feature_id,prompt_idx,prompt,continuation,nll,judge_coherence
 B0,0.0,23651,25,The book describes how," its chapters describe physics impossible to explain in terms of ways that don't apply with modern methods.
 
-Derek, who is atheist, is an associate professor",3.705442190170288,50.0
-B0,0.0,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, had paused, a light flashed up across the hollow of the square, twink",4.398937702178955,40.0
+Derek, who is atheist, is an associate professor",3.705442190170288,45.0
+B0,0.0,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, had paused, a light flashed up across the hollow of the square, twink",4.398937702178955,35.0
 B0,0.0,105157,17,"After a few minutes,"," in the doorway that led out of the building, you could see Jonathan Chimney sitting and clapping with you. (He hoped you didn't expect to catch",3.6903817653656006,85.0
-B1,0.2,23651,25,The book describes how," its subjects were reared by a single caretaker at age 1, going by adoption records and thereby exposing the genetic contraindications that inevitably ensue.",3.9803555011749268,85.0
-B1,0.2,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, sat paused, a light flashed up across the hollow of the square, twink",4.596227645874023,40.0
-B1,0.2,105157,17,"After a few minutes,"," in the doorway that led to the part that led you to the Bird's Eye Inn and found itself in Alain's fire-colored clothes, I stepped out",3.9101624488830566,40.0
-B1,0.4,23651,25,The book describes how," its subjects were reared and then exposed to the ways that a normal, one night's care will lead to genetic, nutritional or developmental abnormalities. Currently, SEC",4.509564399719238,40.0
-B1,0.4,105157,29,"Under the bright lights,"," waiting where he thought one was as well, and then a badly moved threshold, perhaps it was a light road that's not forked, perhaps, certainly not",4.909147262573242,30.0
-B1,0.4,105157,17,"After a few minutes,"," in the doorway that led to Istvan, you could see Jonathan's eyes; and you should see you didn't fire at him with a single stone.",3.8043248653411865,60.0
-B1,0.6,23651,25,The book describes how," its mother's re-brain environment had abundant absence of sense input, and one night she decided her pink pup Rharia's memory assignment was not adequate for SEC",6.073829650878906,85.0
-B1,0.6,105157,29,"Under the bright lights,"," waiting where this bridge is markers has the school's highway and bridge markers on the dry sag should come into contact with those fences. They will, however,",5.459336757659912,30.0
-B1,0.6,105157,17,"After a few minutes,"," in the fields that stopped at I-12, you could see the encampment of trucks and cattle, you didn't have to keep the line that could go",3.974672317504883,50.0
-B1,0.8,23651,25,The book describes how, its mother's re-brain environment had abundant absence of COB normal weight with peak COB exposure to the RhP > 0.17 to24 (< 1,6.656852722167969,30.0
-B1,0.8,105157,29,"Under the bright lights,"," waiting where this bridge one was has the school's highway and bridge crossing a street.""A street.""But it did not. Swowed by a line, rail",5.825774192810059,20.0
-B1,0.8,105157,17,"After a few minutes,"," in the river that stopped at Istcross, you cross at the river. Into Lake and showed you didn't cross at the border with that line occurred",5.297398567199707,30.0
-B1,1.0,23651,25,The book describes how," its mother's re-brain environment exposed us against the sense that normal, with peak CO2 to CFD Rharia BLRU-Z24 (< SEC",7.411070823669434,10.0
-B1,1.0,105157,29,"Under the bright lights,"," waiting where this bridge one was has the river and it a bridge, a cross, it, a river and that bridge dead and into the river, into rail",5.042110443115234,20.0
-B1,1.0,105157,17,"After a few minutes,"," in the river that stopped at Istcross, you cross at the river river between and and show my way to the fire he keep the guards that did not",5.110003471374512,20.0
-B2,0.2,23651,25,The book describes how," its subjects were reared by a single caretaker at age 1, going by adoption records and thereby exposing the genetic contraindications that inevitably ensue.",3.9803555011749268,85.0
-B2,0.2,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, sat paused, a light flashed up across the hollow of the square, twink",4.596227645874023,40.0
-B2,0.2,105157,17,"After a few minutes,"," in the doorway that led out to the pot, you could see Jonathan's interview with Andrew and show off his amazing beard. Andrew smiled smugly at him and",3.7596347332000732,40.0
-B2,0.4,23651,25,The book describes how," its subjects were reared and then exposed to the ways that a normal, one night's care will lead to genetic, nutritional or developmental abnormalities. Currently, SEC",4.509564399719238,40.0
-B2,0.4,105157,29,"Under the bright lights,"," waiting where he thought one was as well, and then a badly moved threshold, there paused, a light and nothing. An undisguised threshold, signposted",4.925778388977051,30.0
-B2,0.4,105157,17,"After a few minutes,"," in the doorway that led to Istvan, you could see Jonathan's eyes; and you should see you didn't there he keep the cloak that led to",4.130276679992676,30.0
-B2,0.6,23651,25,The book describes how," its mother's re-brain environment had abundant absence of sense input, and with peak CO2 exposure, the animals were subjected to pre- ).24–24",5.615410804748535,30.0
-B2,0.6,105157,29,"Under the bright lights,"," waiting where this bridge is markers has the school's highway and bridge markers on the dry sag should come into contact with those fences. They will, however,",5.459336757659912,30.0
-B2,0.6,105157,17,"After a few minutes,"," in the fields that stopped at I-12, you could see the encampment of blood and cattle, you didn't have to keep the line that could not",4.077775955200195,50.0
-B2,0.8,23651,25,The book describes how, its mother's re-brain environment had abundant absence of COBio pollen chilling peak COA to 6 days' to 6.5 that rate before he had,7.013619899749756,20.0
-B2,0.8,105157,29,"Under the bright lights,", waiting where this bridge is markers has the school's highway and bridge markers on I.A.— a road and creek. Right for agricultural land. It is within,5.827420234680176,30.0
-B2,0.8,105157,17,"After a few minutes,"," in the river that stopped at Istence, you could atd. there; and and in, you didn't. he.; the river that did occurred",5.336132049560547,10.0
-B2,1.0,23651,25,The book describes how, its mother's re-brain environment exposed to absence intemmence drugs with peak COA to CFD RhP BLRU-Z24-ND,7.63618278503418,10.0
-B2,1.0,105157,29,"Under the bright lights,"," waiting where this bridge one was has the school and highway and bridge and a storm.""A street should come into that bridge and thereopausalst., registne",6.925499439239502,20.0
+B1,0.2,23651,25,The book describes how," its subjects were reared by a single caretaker at age 1, going by adoption records and thereby exposing the genetic contraindications that inevitably ensue.",3.9803555011749263,45.0
+B1,0.2,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, sat paused, a light flashed up across the hollow of the square, twink",4.596227645874023,35.0
+B1,0.2,105157,17,"After a few minutes,"," in the doorway that led to the part that led you to the Bird's Eye Inn and found itself in Alain's fire-colored clothes, I stepped out",3.9101624488830566,35.0
+B1,0.4,23651,25,The book describes how," its subjects were reared and then exposed to the ways that a normal, one night's care will lead to genetic, nutritional or developmental abnormalities. Currently, SEC",4.509564399719238,45.0
+B1,0.4,105157,29,"Under the bright lights,"," waiting where he thought one was as well, and then a badly moved threshold, perhaps it was a light road that's not forked, perhaps, certainly not",4.909147262573242,45.0
+B1,0.4,105157,17,"After a few minutes,"," in the doorway that led to Istvan, you could see Jonathan's eyes; and you should see you didn't fire at him with a single stone.",3.8043248653411865,45.0
+B1,0.6,23651,25,The book describes how," its mother's re-brain environment had abundant absence of sense input, and one night she decided her pink pup Rharia's memory assignment was not adequate for SEC",6.073829650878906,45.0
+B1,0.6,105157,29,"Under the bright lights,"," waiting where this bridge is markers has the school's highway and bridge markers on the dry sag should come into contact with those fences. They will, however,",5.459336757659912,25.0
+B1,0.6,105157,17,"After a few minutes,"," in the fields that stopped at I-12, you could see the encampment of trucks and cattle, you didn't have to keep the line that could go",3.974672317504883,45.0
+B1,0.8,23651,25,The book describes how, its mother's re-brain environment had abundant absence of COB normal weight with peak COB exposure to the RhP > 0.17 to24 (< 1,6.656852722167969,10.0
+B1,0.8,105157,29,"Under the bright lights,"," waiting where this bridge one was has the school's highway and bridge crossing a street.""A street.""But it did not. Swowed by a line, rail",5.825774192810059,5.0
+B1,0.8,105157,17,"After a few minutes,"," in the river that stopped at Istcross, you cross at the river. Into Lake and showed you didn't cross at the border with that line occurred",5.297398567199707,15.0
+B1,1.0,23651,25,The book describes how," its mother's re-brain environment exposed us against the sense that normal, with peak CO2 to CFD Rharia BLRU-Z24 (< SEC",7.411070823669434,5.0
+B1,1.0,105157,29,"Under the bright lights,"," waiting where this bridge one was has the river and it a bridge, a cross, it, a river and that bridge dead and into the river, into rail",5.042110443115234,5.0
+B1,1.0,105157,17,"After a few minutes,"," in the river that stopped at Istcross, you cross at the river river between and and show my way to the fire he keep the guards that did not",5.110003471374512,5.0
+B2,0.2,23651,25,The book describes how," its subjects were reared by a single caretaker at age 1, going by adoption records and thereby exposing the genetic contraindications that inevitably ensue.",3.9803555011749263,45.0
+B2,0.2,105157,29,"Under the bright lights,"," waiting where he thought one or two boys, who were a badly moved boys, sat paused, a light flashed up across the hollow of the square, twink",4.596227645874023,35.0
+B2,0.2,105157,17,"After a few minutes,"," in the doorway that led out to the pot, you could see Jonathan's interview with Andrew and show off his amazing beard. Andrew smiled smugly at him and",3.7596347332000737,45.0
+B2,0.4,23651,25,The book describes how," its subjects were reared and then exposed to the ways that a normal, one night's care will lead to genetic, nutritional or developmental abnormalities. Currently, SEC",4.509564399719238,45.0
+B2,0.4,105157,29,"Under the bright lights,"," waiting where he thought one was as well, and then a badly moved threshold, there paused, a light and nothing. An undisguised threshold, signposted",4.925778388977051,35.0
+B2,0.4,105157,17,"After a few minutes,"," in the doorway that led to Istvan, you could see Jonathan's eyes; and you should see you didn't there he keep the cloak that led to",4.130276679992676,15.0
+B2,0.6,23651,25,The book describes how," its mother's re-brain environment had abundant absence of sense input, and with peak CO2 exposure, the animals were subjected to pre- ).24–24",5.615410804748535,10.0
+B2,0.6,105157,29,"Under the bright lights,"," waiting where this bridge is markers has the school's highway and bridge markers on the dry sag should come into contact with those fences. They will, however,",5.459336757659912,25.0
+B2,0.6,105157,17,"After a few minutes,"," in the fields that stopped at I-12, you could see the encampment of blood and cattle, you didn't have to keep the line that could not",4.077775955200195,45.0
+B2,0.8,23651,25,The book describes how, its mother's re-brain environment had abundant absence of COBio pollen chilling peak COA to 6 days' to 6.5 that rate before he had,7.013619899749756,5.0
+B2,0.8,105157,29,"Under the bright lights,", waiting where this bridge is markers has the school's highway and bridge markers on I.A.— a road and creek. Right for agricultural land. It is within,5.827420234680176,25.0
+B2,0.8,105157,17,"After a few minutes,"," in the river that stopped at Istence, you could atd. there; and and in, you didn't. he.; the river that did occurred",5.336132049560547,5.0
+B2,1.0,23651,25,The book describes how, its mother's re-brain environment exposed to absence intemmence drugs with peak COA to CFD RhP BLRU-Z24-ND,7.63618278503418,5.0
+B2,1.0,105157,29,"Under the bright lights,"," waiting where this bridge one was has the school and highway and bridge and a storm.""A street should come into that bridge and thereopausalst., registne",6.925499439239502,5.0
 B2,1.0,105157,17,"After a few minutes,", in the river that stopped at Ist that threshold you into atIlimone with and and showed you didnwith. he was withst linewith occurred,6.810783386230469,5.0
