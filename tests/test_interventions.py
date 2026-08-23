@@ -154,6 +154,24 @@ def test_b2_r_zero_is_the_identity(v, prompt_hidden):
     torch.testing.assert_close(out, prompt_hidden, rtol=1e-4, atol=1e-3)
 
 
+# --- dtype: Gemma's hidden states are bf16, v is built float32 elsewhere ---------------------
+
+def test_b1_preserves_bf16_hidden_dtype(v, prompt_hidden):
+    """Gemma loads bf16 (GPT-2 doesn't, which is why this never surfaced before): ``v`` here is
+    float32, and ``hidden + self.delta`` must come back in ``hidden``'s own dtype or
+    ``ResidualHook`` refuses the result outright (hooks.py's own dtype-change guard) -- caught
+    for real via exactly this combination during a live Gemma run."""
+    b1 = interventions.AdditiveSteering(v, r=0.5, scale=90.0)
+    out = b1(prompt_hidden.bfloat16())
+    assert out.dtype == torch.bfloat16
+
+
+def test_b2_preserves_bf16_hidden_dtype(v, prompt_hidden):
+    b2 = interventions.NormMatchedSteering(v, r=0.5, scale=90.0)
+    out = b2(prompt_hidden.bfloat16())
+    assert out.dtype == torch.bfloat16
+
+
 # --- installed on a real hook, end to end ---------------------------------------------------
 
 def test_b1_installed_on_a_real_hook_reaches_decode_steps(v):
@@ -239,6 +257,21 @@ def test_denoised_steering_skips_the_sink_like_every_other_intervention():
     torch.testing.assert_close(out[:, 0, :], hidden[:, 0, :])
 
 
+def test_denoised_steering_preserves_bf16_hidden_dtype():
+    """The chain that actually crashed on a live Gemma run: bf16 hidden -> AdditiveSteering
+    (float32 v) -> ResidualMLPDenoiser (float32 weights) -> back out. Every link must return
+    the dtype it received."""
+    from steering import corruptions
+
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    iv = interventions.DenoisedSteering(v, r=0.5, scale=90.0, model=model,
+                                        corruption_description=corruptions.Rank1().describe())
+    hidden = torch.randn(2, 4, 8).bfloat16() * 90.0
+    out = iv(hidden)
+    assert out.dtype == torch.bfloat16
+
+
 def test_denoised_steering_actually_changes_output_once_trained():
     """A denoiser with a nonzero head must produce something different from plain B1 -- proves
     the model is actually being called, not silently bypassed."""
@@ -257,6 +290,82 @@ def test_denoised_steering_actually_changes_output_once_trained():
                                               corruption_description=description)
     hidden = torch.randn(3, 5, 8) * 90.0
     assert not torch.allclose(denoised(hidden), b1(hidden))
+
+
+def test_project_correction_defaults_to_off():
+    from steering import corruptions
+
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    iv = interventions.DenoisedSteering(v, r=0.5, scale=90.0, model=model,
+                                        corruption_description=corruptions.Rank1().describe())
+    assert iv.project_correction is False
+
+
+def test_project_correction_removes_the_component_along_v():
+    """PDS (Step 10): the total correction relative to plain steering must have exactly zero
+    component along v_hat -- the property project_correction exists for, checked directly on
+    the output rather than trusting the algebra in the docstring."""
+    from steering import corruptions
+
+    torch.manual_seed(0)
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    with torch.no_grad():
+        model.out.weight.copy_(torch.eye(*model.out.weight.shape) * 0.3)
+        model.out.bias.zero_()
+    description = corruptions.Rank1().describe()
+
+    pds = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                         corruption_description=description,
+                                         project_correction=True)
+    hidden = torch.randn(3, 5, 8) * 90.0
+    out = pds(hidden)
+
+    steered = interventions.AdditiveSteering(v, r=0.7, scale=90.0)(hidden)
+    correction = out - steered
+    parallel = torch.einsum("...d,d->...", correction, pds.v)
+    assert torch.allclose(parallel, torch.zeros_like(parallel), atol=1e-5)
+
+
+def test_project_correction_differs_from_plain_denoising_when_correction_has_a_parallel_part():
+    """Confirms PDS actually changes the output -- not just that the property above holds
+    vacuously because the correction was already orthogonal to begin with."""
+    from steering import corruptions
+
+    torch.manual_seed(0)
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    with torch.no_grad():
+        model.out.weight.copy_(torch.eye(*model.out.weight.shape) * 0.3)
+        model.out.bias.zero_()
+    description = corruptions.Rank1().describe()
+
+    plain = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                           corruption_description=description)
+    pds = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                         corruption_description=description,
+                                         project_correction=True)
+    hidden = torch.randn(3, 5, 8) * 90.0
+    assert not torch.allclose(plain(hidden), pds(hidden))
+
+
+def test_project_correction_is_a_no_op_when_the_denoiser_is_untrained():
+    """Untrained (identity) denoiser: delta is exactly zero everywhere, so projecting it changes
+    nothing -- PDS must reduce to plain B1 here exactly like plain denoising already does."""
+    from steering import corruptions
+
+    torch.manual_seed(0)
+    v = torch.randn(8)
+    model = make_untrained_denoiser()
+    description = corruptions.Rank1().describe()
+
+    b1 = interventions.AdditiveSteering(v, r=0.7, scale=90.0)
+    pds = interventions.DenoisedSteering(v, r=0.7, scale=90.0, model=model,
+                                         corruption_description=description,
+                                         project_correction=True)
+    hidden = torch.randn(3, 5, 8) * 90.0
+    torch.testing.assert_close(pds(hidden), b1(hidden), atol=1e-5, rtol=0)
 
 
 def test_denoised_steering_installed_on_a_real_hook_reaches_decode_steps():

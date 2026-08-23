@@ -70,7 +70,13 @@ def cache_activations(
             # Mask is built from `enc`, which lives on `device`; move it to `hidden`'s device
             # rather than the (larger) hidden states -- same fix as compute_feature_stats.
             mask = enc["attention_mask"].bool()[:, start_pos:].to(hidden.device)
-            acts = hidden[:, start_pos:, :][mask]
+            # .float(): a bf16-loaded model (Gemma; GPT-2 never exercises this) would otherwise
+            # hand back bf16 activations here. Harmless on CPU/CUDA, which upcast a mixed
+            # bf16-vs-fp32 matmul silently -- but MPS's MPSNDArrayMatrixMultiplication kernel
+            # hard-asserts on it instead of upcasting, killing the process (SIGABRT) with no
+            # Python traceback the first time these activations meet ResidualMLPDenoiser's
+            # fp32 weights. Cast once, here, rather than trusting every caller to remember.
+            acts = hidden[:, start_pos:, :][mask].float()
             if acts.numel() == 0:
                 continue
 
@@ -198,9 +204,23 @@ class ResidualMLPDenoiser(nn.Module):
         return self.out(h)
 
     def forward(self, x: torch.Tensor, t: torch.Tensor | float) -> torch.Tensor:
-        """Denoise. ``x`` is a raw activation in model units, any leading batch shape."""
+        """Denoise. ``x`` is a raw activation in model units, any leading batch shape.
+
+        Dtype-transparent: this module's own weights are float32 (never changed for a
+        bf16-loaded model like Gemma -- a 20M-param MLP gains nothing from bf16 and MPS's
+        matmul kernel hard-asserts on a float32/bf16 mix rather than upcasting), so ``x`` is
+        cast to float32 internally and the result cast back to ``x``'s own dtype before
+        returning. GPT-2 (already float32) pays a no-op cast; a caller applying this to a
+        bf16 residual stream (Gemma, via an ``Intervention``) gets back exactly the dtype
+        the rest of that model's forward pass still expects, so the composition is safe
+        without every caller needing to know this module is internally float32.
+        """
+        orig_dtype = x.dtype
+        x = x.float()
         if isinstance(t, (int, float)):
             t = torch.full(x.shape[:1], float(t), device=x.device, dtype=x.dtype)
+        else:
+            t = t.float()
 
         scale = float(self.activation_scale)
         encoded = spaces.encode(x, scale, center=self.center)
@@ -211,7 +231,8 @@ class ResidualMLPDenoiser(nn.Module):
         # design -- centering is never undone on decode); used here anyway so this is
         # literally the same call site the rest of the project uses, not a second,
         # separately-written copy of the same arithmetic.
-        return x + spaces.decode(correction, scale, center=self.center)
+        result = x + spaces.decode(correction, scale, center=self.center)
+        return result.to(orig_dtype)
 
 
 def denoising_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
@@ -312,6 +333,73 @@ def train_denoiser(
     model.eval()
     model.requires_grad_(False)
     return model, history
+
+
+def pool_memorization_curve(
+    train_activations: torch.Tensor,
+    val_activations: torch.Tensor,
+    decoder: torch.Tensor,
+    split,
+    dev_probe,
+    pool_sizes: list[int | None],
+    d_model: int,
+    activation_scale: float,
+    center: bool,
+    steps: int,
+    batch_size: int,
+    lr: float,
+    seed: int = 0,
+    n_examples: int = 4096,
+    eval_seed: int = 999,
+    device: str = "cpu",
+) -> list[dict]:
+    """Step 9A: does a rank-1 denoiser memorise its training pool, and does that fade as the
+    pool widens?
+
+    Trains one denoiser per entry in ``pool_sizes`` (``None`` means the full train pool, i.e.
+    D4) and evaluates each against two probes built from directions it trained on
+    (``own_loss``) versus ``dev_probe`` -- directions no pool-size model here has ever seen
+    (DECISIONS D1's DEV set; legitimate for this kind of check per Step 5's own precedent,
+    since TEST alone stays untouched before Step 8).
+
+    ``own_loss`` reuses each pool's own corruption object as the eval probe too -- the same
+    directions it trained on, but with a *different* seed (``eval_seed``), so the loss reflects
+    held-out (index, noise) draws along seen directions rather than memorised training batches.
+    A small fixed pool that has genuinely memorised its directions should still reconstruct them
+    far better than an unseen one (``memorization_ratio = unseen_loss / own_loss`` well above 1);
+    a pool wide enough that "seen" and "unseen" are barely different distributions should push
+    that ratio toward 1 -- which is D4's own justification (PLAN.md: no fixed subset to
+    memorise), not assumed here but the thing this curve is meant to show or fail to show.
+
+    Trains fresh at every call rather than accepting pre-trained models: pool size, seed,
+    activations and steps must all match for ``own_loss`` and ``unseen_loss`` to be comparable
+    points on one curve, and a caller-supplied model provides no way to check that.
+    """
+    from steering import corruptions
+
+    rows: list[dict] = []
+    for pool_size in pool_sizes:
+        if pool_size is None:
+            corruption = corruptions.FullPoolRank1(decoder, split)
+        else:
+            corruption = corruptions.FixedPoolRank1(decoder, split, pool_size=pool_size, seed=seed)
+
+        model, _ = train_denoiser(
+            train_activations, corruption, d_model, activation_scale, center,
+            steps=steps, batch_size=batch_size, lr=lr, seed=seed, device=device,
+        )
+        own_loss = evaluate_denoiser(model, val_activations, corruption,
+                                     n_examples=n_examples, seed=eval_seed, device=device)
+        unseen_loss = evaluate_denoiser(model, val_activations, dev_probe,
+                                        n_examples=n_examples, seed=eval_seed, device=device)
+        rows.append({
+            "pool_size": "full" if pool_size is None else pool_size,
+            "n_directions": len(corruption.pool_indices),
+            "own_loss": own_loss,
+            "unseen_loss": unseen_loss,
+            "memorization_ratio": unseen_loss / own_loss,
+        })
+    return rows
 
 
 @torch.no_grad()

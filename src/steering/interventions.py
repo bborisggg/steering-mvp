@@ -70,7 +70,12 @@ class AdditiveSteering(Intervention):
         return self.alpha * self.v
 
     def apply(self, hidden: torch.Tensor) -> torch.Tensor:
-        return hidden + self.delta
+        # .to(hidden.dtype): self.delta is built from v, which callers construct in whatever
+        # dtype is convenient (float32, typically) -- a no-op for GPT-2, whose hidden states
+        # already are float32, but required for Gemma (bf16): ResidualHook refuses to let an
+        # intervention silently change the hook's dtype (hooks.py's own guard), and it is right
+        # to -- Gemma's later blocks expect bf16 back, not a promoted float32 residual stream.
+        return hidden + self.delta.to(hidden.dtype)
 
 
 class NormMatchedSteering(AdditiveSteering):
@@ -84,7 +89,7 @@ class NormMatchedSteering(AdditiveSteering):
 
     def apply(self, hidden: torch.Tensor) -> torch.Tensor:
         original = hidden.norm(dim=-1, keepdim=True)
-        steered = hidden + self.delta
+        steered = super().apply(hidden)  # dtype-safe addition, not a duplicated raw one
         return steered * (original / steered.norm(dim=-1, keepdim=True).clamp_min(1e-6))
 
 
@@ -97,24 +102,47 @@ class DenoisedSteering(AdditiveSteering):
     regardless of the deployed ``r`` as a silent, severe misuse: a t-conditioned denoiser
     defaults to maximum denoising at every strength if the map is skipped.
 
+    ``project_correction=True`` turns this into PDS (Step 10): the denoiser's correction is
+    applied only in the directions orthogonal to ``v``, leaving the component of the steered
+    activation along ``v`` untouched --
+
+        delta = D(steered) - steered
+        delta_perp = delta - <delta, v_hat> * v_hat
+        output = steered + delta_perp
+
+    A cheap, one-shot diagnostic (PLAN.md Step 10: "no lambda sweep, no attempt to rescue it"),
+    not a tuned method -- no correction-strength knob. Reusing this class rather than a
+    separate PDS pipeline means it gets exactly the same alpha normalisation, r->t
+    conditioning, and sink handling as every other arm for free; a hand-rolled parallel
+    implementation could drift from any of the three without anyone noticing.
+
     Args:
         v, r, scale: as ``AdditiveSteering`` -- the steering push applied before denoising.
         model: a trained (or, for testing, untrained) ``ResidualMLPDenoiser``.
         corruption_description: the training corruption's ``describe()`` output, exactly what
             ``t_for_r`` needs and no more -- this class never needs the SAE or the split that
             originally built the corruption, only the small dict a checkpoint carries.
+        project_correction: if True, drop the component of the denoiser's correction that lies
+            along ``v`` (PDS). Default False: plain ``D(h + alpha*v)``.
     """
 
     id = "denoised"
 
     def __init__(self, v: torch.Tensor, r: float, scale: float, model,
-                corruption_description: dict):
+                corruption_description: dict, project_correction: bool = False):
         from steering import corruptions
 
         super().__init__(v, r, scale)
         self.model = model
         self.t = corruptions.t_for_r(corruption_description, r)
+        self.project_correction = project_correction
 
     def apply(self, hidden: torch.Tensor) -> torch.Tensor:
         steered = super().apply(hidden)
-        return self.model(steered, t=self.t)
+        denoised = self.model(steered, t=self.t)
+        delta = denoised - steered
+        if self.project_correction:
+            # self.v is already unit-normalised, by AdditiveSteering.__init__.
+            coeff = torch.einsum("...d,d->...", delta, self.v)
+            delta = delta - coeff[..., None] * self.v
+        return steered + delta

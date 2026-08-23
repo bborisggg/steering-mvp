@@ -32,6 +32,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RESULTS = REPO_ROOT / "results"
 ARTIFACTS = REPO_ROOT / "artifacts"
 CONFIGS = REPO_ROOT / "configs"
+FIGURES = REPO_ROOT / "docs" / "figures"
 
 
 class CacheMismatch(RuntimeError):

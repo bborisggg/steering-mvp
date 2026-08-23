@@ -1,0 +1,18 @@
+{
+  "artifact": "denoiser_repair_mechanism_gpt2.csv",
+  "config": {
+    "checkpoint": "denoiser_d4_seed0",
+    "n_clean": 500,
+    "r_grid": [
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0
+    ],
+    "split_fingerprint": "ce65a9496b253ceb",
+    "version": 1
+  },
+  "hash": "7407f8ba64d84dcc",
+  "int_keyed": false
+}

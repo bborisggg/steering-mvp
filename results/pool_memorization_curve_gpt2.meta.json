@@ -1,0 +1,19 @@
+{
+  "artifact": "pool_memorization_curve_gpt2.csv",
+  "config": {
+    "batch_size": 256,
+    "lr": 0.001,
+    "pool_sizes": [
+      "64",
+      "256",
+      "1024",
+      "None"
+    ],
+    "seed": 0,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "steps": 5000,
+    "version": 1
+  },
+  "hash": "0fabf352934f745d",
+  "int_keyed": false
+}

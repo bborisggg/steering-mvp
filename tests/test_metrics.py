@@ -323,3 +323,109 @@ def test_concept_score_sensitive_to_an_active_hook(gpt2, sae):
                                            prompts=prompts, continuations=continuations,
                                            device="cpu", center=True)
     assert clean["mean_act"] != pytest.approx(hooked["mean_act"], rel=1e-3)
+
+
+# --- Step 9B: PCAFit / fit_pca_distance -----------------------------------------------------
+
+def test_pca_distance_is_near_zero_at_the_fitted_mean():
+    g = torch.Generator().manual_seed(0)
+    acts = torch.randn(500, 16, generator=g) * torch.tensor([10.0] + [1.0] * 15) + 5.0
+    fit = metrics.fit_pca_distance(acts)
+    assert fit.distance(fit.mean.unsqueeze(0)).item() < 1e-4
+
+
+def test_pca_distance_whitens_high_variance_directions():
+    """A step of the same Euclidean size should cost less distance along a direction the clean
+    distribution actually varies in than along one it barely varies in -- otherwise this would
+    just be Euclidean distance with extra steps."""
+    g = torch.Generator().manual_seed(0)
+    d = 16
+    scales = torch.tensor([20.0] + [1.0] * (d - 1))  # dim 0 has far more spread than the rest
+    acts = torch.randn(2000, d, generator=g) * scales
+    fit = metrics.fit_pca_distance(acts)
+
+    step = 5.0
+    along_high_variance = fit.mean.clone()
+    along_high_variance[0] += step
+    along_low_variance = fit.mean.clone()
+    along_low_variance[1] += step
+
+    d_high = fit.distance(along_high_variance.unsqueeze(0)).item()
+    d_low = fit.distance(along_low_variance.unsqueeze(0)).item()
+    assert d_high < d_low, (
+        f"same Euclidean step should cost less along the high-variance dim: {d_high} vs {d_low}"
+    )
+
+
+def test_pca_fit_to_moves_only_the_fitted_tensors_not_dtype_or_values():
+    g = torch.Generator().manual_seed(0)
+    acts = torch.randn(200, 8, generator=g)
+    fit = metrics.fit_pca_distance(acts)
+    moved = fit.to("cpu")  # exercised on CPU so this test runs without an MPS/CUDA device
+    assert torch.allclose(moved.mean, fit.mean)
+    assert torch.allclose(moved.eigvecs, fit.eigvecs)
+    assert torch.allclose(moved.eigvals, fit.eigvals)
+    probe = torch.randn(5, 8, generator=g)
+    assert torch.allclose(moved.distance(probe), fit.distance(probe))
+
+
+def test_pca_ridge_prevents_blowup_on_a_degenerate_dimension():
+    """A dimension with exactly zero variance in the fitted pool would make Mahalanobis
+    distance infinite without a floor -- ridge exists precisely to keep this finite."""
+    g = torch.Generator().manual_seed(0)
+    acts = torch.randn(500, 8, generator=g)
+    acts[:, -1] = 3.0  # constant column: zero variance
+    fit = metrics.fit_pca_distance(acts, ridge=1e-2)
+
+    probe = fit.mean.clone()
+    probe[-1] += 1.0
+    assert torch.isfinite(fit.distance(probe.unsqueeze(0))).all()
+
+
+# --- Step 9B: denoiser_correction_along_v ---------------------------------------------------
+
+def test_correction_entirely_along_v_reads_as_fraction_one():
+    d = 8
+    v = torch.zeros(d)
+    v[0] = 1.0
+    steered = torch.randn(20, d)
+
+    def fake_denoiser(x, t):
+        return x - 3.0 * v  # correction is exactly 3*v -- entirely parallel
+
+    out = metrics.denoiser_correction_along_v(fake_denoiser, steered, v, t=0.5)
+    assert torch.allclose(out["fraction_along_v"], torch.ones(20), atol=1e-5)
+    assert torch.allclose(out["orthogonal_norm"], torch.zeros(20), atol=1e-4)
+    assert torch.allclose(out["along_v"], torch.full((20,), 3.0), atol=1e-4)
+
+
+def test_correction_orthogonal_to_v_reads_as_fraction_zero():
+    d = 8
+    v = torch.zeros(d)
+    v[0] = 1.0
+    u = torch.zeros(d)
+    u[1] = 1.0  # orthogonal to v
+    steered = torch.randn(20, d)
+
+    def fake_denoiser(x, t):
+        return x - 2.0 * u
+
+    out = metrics.denoiser_correction_along_v(fake_denoiser, steered, v, t=0.5)
+    assert torch.allclose(out["fraction_along_v"], torch.zeros(20), atol=1e-5)
+    assert torch.allclose(out["along_v"], torch.zeros(20), atol=1e-5)
+    assert torch.allclose(out["orthogonal_norm"], torch.full((20,), 2.0), atol=1e-4)
+
+
+def test_correction_along_v_sign_is_preserved():
+    """A negative along_v means the denoiser *adds* to the steering push rather than removing
+    it -- the sign this project's own findings say must not be assumed universal."""
+    d = 8
+    v = torch.zeros(d)
+    v[0] = 1.0
+    steered = torch.randn(5, d)
+
+    def fake_denoiser(x, t):
+        return x + 4.0 * v  # denoised is *further* along v than steered -- amplification
+
+    out = metrics.denoiser_correction_along_v(fake_denoiser, steered, v, t=0.5)
+    assert torch.allclose(out["along_v"], torch.full((5,), -4.0), atol=1e-4)

@@ -51,6 +51,25 @@ def test_returns_the_right_shape(gpt2):
     assert acts.shape[1] == 768
 
 
+def test_returns_fp32_even_when_the_model_is_loaded_in_bf16():
+    """Gemma loads bf16 by default (GPT-2 never exercises this path, which is exactly why the
+    bug survived to a real run): activations must come back fp32 regardless, or the first
+    matmul against ResidualMLPDenoiser's fp32 weights crashes MPS with a hard Metal assertion
+    (SIGABRT, no Python traceback) rather than upcasting the way CPU/CUDA silently would.
+    Cast a GPT-2 copy to bf16 here so this is caught on CPU, without needing Gemma in the
+    test suite.
+    """
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    tok = AutoTokenizer.from_pretrained("gpt2")
+    tok.pad_token = tok.eos_token
+    model = AutoModelForCausalLM.from_pretrained("gpt2").eval().to(torch.bfloat16)
+
+    acts = denoiser.cache_activations(model, tok, layer=LAYER, texts=TEXTS, max_tokens=200,
+                                      batch_size=4, max_length=32)
+    assert acts.dtype == torch.float32
+
+
 def test_stops_at_max_tokens(gpt2):
     model, tok = gpt2
     acts = denoiser.cache_activations(model, tok, layer=LAYER, texts=TEXTS, max_tokens=50,
@@ -188,6 +207,19 @@ def test_output_shape_matches_input():
     d = make_denoiser()
     x = torch.randn(4, D_MODEL) * 90.0
     assert d(x, t=0.5).shape == x.shape
+
+
+def test_forward_returns_the_input_dtype_even_though_weights_are_float32():
+    """This module's own weights are always float32 (never worth bf16 for a 20M-param MLP),
+    but Gemma's residual stream is bf16 -- and MPS's matmul kernel hard-asserts on a
+    float32/bf16 mix rather than upcasting the way CPU/CUDA would (this is exactly what killed
+    a real training run before the fix). ``D(x, t)`` must accept and return whatever dtype
+    ``x`` arrives in, transparently, so a caller composing this with a bf16 model's hidden
+    states never needs to know this module computes internally in float32."""
+    d = make_denoiser()
+    x = torch.randn(4, D_MODEL) * 90.0
+    out = d(x.bfloat16(), t=0.5)
+    assert out.dtype == torch.bfloat16
 
 
 # --- the un-scale trap: correction must be applied in RAW units, not normalised --------------
@@ -407,6 +439,43 @@ def test_train_denoiser_works_with_structured_rank1():
         steps=20, batch_size=32, seed=0, device="cpu", log_every=10,
     )
     assert all(math.isfinite(h["loss"]) for h in history)
+
+
+# ==============================================================================================
+# pool_memorization_curve: Step 9A -- does a fixed pool memorise its own directions?
+# ==============================================================================================
+
+def test_pool_memorization_curve_shows_more_overfitting_at_a_smaller_pool():
+    """A tiny fixed pool should reconstruct directions it trained on (``own_loss``) far better
+    than one it never saw (``unseen_loss``, ``dev_probe``) -- the memorisation signature Step 6
+    measured at real GPT-2 scale (dev-generalization loss 0.168 at pool 64 vs 0.121 at the full
+    pool, DEVLOG 2026-08-22: diversity helps up to ~1024 directions, then saturates). A much
+    wider pool should show a smaller seen/unseen gap: with more directions to cover, "seen" and
+    "unseen" are more similar distributions, leaving less room for genuine memorisation.
+    """
+    from steering.vectors import VectorSplit
+
+    decoder = torch.randn(60, D_MODEL, generator=torch.Generator().manual_seed(0))
+    split = VectorSplit(dev=list(range(10)), test=list(range(10, 20)), pool_size=60, seed=0,
+                        model="test", source="test", created="")
+    dev_probe = corruptions.StructuredRank1(decoder, pool_indices=split.dev, holdout=set(),
+                                            rho_min=0.05, rho_max=1.0)
+    activations = synthetic_pool(n=2000)
+
+    rows = denoiser.pool_memorization_curve(
+        activations, activations, decoder, split, dev_probe,
+        pool_sizes=[2, None], d_model=D_MODEL, activation_scale=90.0, center=False,
+        steps=300, batch_size=64, lr=3e-3, seed=0, n_examples=1024, eval_seed=999, device="cpu",
+    )
+
+    assert [r["pool_size"] for r in rows] == [2, "full"]
+    assert rows[0]["n_directions"] == 2
+    assert rows[1]["n_directions"] == len(split.train_pool())
+    assert all(math.isfinite(r["memorization_ratio"]) for r in rows)
+    assert rows[0]["memorization_ratio"] > rows[1]["memorization_ratio"], (
+        f"the 2-direction pool should overfit relatively harder than the full pool: "
+        f"{rows[0]} vs {rows[1]}"
+    )
 
 
 def test_returned_model_is_in_eval_mode_with_grad_disabled():
