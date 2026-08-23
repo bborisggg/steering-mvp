@@ -1,0 +1,23 @@
+{
+  "artifact": "headline_comparison_gpt2.csv",
+  "config": {
+    "baselines": [
+      "B1",
+      "B2",
+      "D1"
+    ],
+    "targets_concept": [
+      10,
+      30,
+      50
+    ],
+    "targets_quality": [
+      10,
+      30,
+      50
+    ],
+    "version": 1
+  },
+  "hash": "9b60e7d42601f264",
+  "int_keyed": false
+}
