@@ -9,25 +9,40 @@ is a **structured rank-1 perturbation**, so a denoiser trained on many *diverse*
 corruptions should generalise to unseen steering vectors better than one trained on generic
 noise, or on a small fixed set of directions.
 
+Primary setting: GPT-2 small + OpenAI SAE. External validation: Gemma-2-2B-it + 6 persona traits.
+
+## Structure
+
 - **`PLAN.md`** — the experiment, step by step
-- **`DECISIONS.md`** — frozen choices, each with its reason
-- **`DEVLOG.md`** — running notes, measured timings, traps already paid for
-- **`notebooks/`** — every run is invoked from here
-- **`src/steering/`** — all reusable code; nothing important is defined in a notebook
+- **`REPORT.md`** — the write-up (not yet drafted — see `PLAN.md` for what it will argue)
+- **`notebooks/`** — every run is invoked from here (`01_baseline` → `04_analysis`); orchestration
+  only, nothing important is defined inline
+- **`src/steering/`** — all reusable code: hooks, corruptions, denoiser, interventions,
+  generation, metrics, judge, stats, io
+- **`scripts/`** — one-off utilities (HF checkpoint push, Gemma trait-data prep)
+- **`tests/`** — run via `pytest`
+- **`results/`** — committed, small, diffable outputs (CSV/JSON); every number in `REPORT.md`
+  traces to a file here
+- **`docs/figures/`** — generated plots
+- **`configs/`** — prompt sets and persona-trait definitions
 
-Primary setting GPT-2 small + OpenAI SAE; external validation Gemma-2-2B-it + 6 persona traits.
+## Checkpoint
 
-**Checkpoint:** [borisggg/steering-denoiser-gpt2](https://huggingface.co/borisggg/steering-denoiser-gpt2)
-— `D4` (rank-1, full-pool corruption), pushed via `scripts/push_hf.py`. 
+[borisggg/steering-denoiser-gpt2](https://huggingface.co/borisggg/steering-denoiser-gpt2) —
+`D4` (rank-1, full-pool corruption), pushed via `scripts/push_hf.py`.
 
 ## Setup
 
 ```bash
 python3.12 -m venv .venv && .venv/bin/pip install -e ".[sae,dev]"
+.venv/bin/pytest
 ```
 
 MPS only — no CUDA, no bitsandbytes, no flash-attn.
 
 ## Status
 
-Structure only. Nothing implemented yet.
+GPT-2: corruption ablation, denoiser training, held-out test, mechanism analysis, and the PDS
+diagnostic are implemented and have run. Gemma-2-2B-it external validation (persona-vector
+steering, `B0`/`B1`/`D1`/`D4`, plus a prompting baseline) is in progress. `REPORT.md` is not
+yet written.
