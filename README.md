@@ -18,8 +18,7 @@ noise, or on a small fixed set of directions.
 Primary setting GPT-2 small + OpenAI SAE; external validation Gemma-2-2B-it + 6 persona traits.
 
 **Checkpoint:** [borisggg/steering-denoiser-gpt2](https://huggingface.co/borisggg/steering-denoiser-gpt2)
-— `D4` (rank-1, full-pool corruption), pushed via `scripts/push_hf.py`. Early snapshot,
-mid-evaluation; the model card states plainly what is and isn't validated yet.
+— `D4` (rank-1, full-pool corruption), pushed via `scripts/push_hf.py`. 
 
 ## Setup
 
