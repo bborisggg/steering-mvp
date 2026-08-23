@@ -1,0 +1,10 @@
+{
+  "artifact": "concept_descriptions_gpt2.csv",
+  "config": {
+    "n_concepts": 105,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "version": 1
+  },
+  "hash": "9b617ede50b2803e",
+  "int_keyed": false
+}

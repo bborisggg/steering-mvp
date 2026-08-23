@@ -1,0 +1,12 @@
+{
+  "artifact": "judge_subset_gpt2.json",
+  "config": {
+    "n_selected": 40,
+    "n_test": 70,
+    "seed": 0,
+    "split_fingerprint": "ce65a9496b253ceb",
+    "version": 1
+  },
+  "hash": "acde5e375f7dd7c0",
+  "int_keyed": false
+}

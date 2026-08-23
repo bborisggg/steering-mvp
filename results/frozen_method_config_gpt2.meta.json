@@ -1,0 +1,49 @@
+{
+  "artifact": "frozen_method_config_gpt2.json",
+  "config": {
+    "architecture": {
+      "center": true,
+      "d_model": 768,
+      "hidden_mult": 2,
+      "t_embed_dim": 128
+    },
+    "corruption": "D4",
+    "hook": {
+      "layer": 6,
+      "model": "gpt2"
+    },
+    "judge_subset_hash": "acde5e375f7dd7c0",
+    "metrics": [
+      "reference_nll",
+      "dist_1",
+      "dist_2",
+      "dist_3",
+      "repetition_4",
+      "sae_concept_score",
+      "judge_coherence",
+      "judge_concept"
+    ],
+    "pool": "full_train_pool",
+    "positions": "all_except_sink",
+    "r_grid": [
+      0.0,
+      0.2,
+      0.4,
+      0.6,
+      0.8,
+      1.0
+    ],
+    "split_fingerprint": "ce65a9496b253ceb",
+    "training": {
+      "batch_size": 256,
+      "lr": 0.001,
+      "rho_max": 3.0,
+      "rho_min": 0.05,
+      "steps": 5000,
+      "winner_seed": 0
+    },
+    "version": 1
+  },
+  "hash": "49db404c4e308bc0",
+  "int_keyed": false
+}

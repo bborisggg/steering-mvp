@@ -1,0 +1,106 @@
+feature_id,description,token_level,frac_nonzero
+1975,code-related structures and syntax patterns,False,0.00157
+3703,"references to video games, particularly their features and classifications",False,0.0007199999999999999
+4114,terms related to machine learning and artificial intelligence,False,0.00031
+6882,"forms of the verb ""to be""",False,0.00017
+7111,body part references related to clothing or sports uniforms,False,0.00063
+9631,"connections related to the game ""Cards Against Humanity.""",False,0.00275
+11244,numerical data related to statistics or percentages,False,0.01702
+11594,"mentions of the concept of ""faith.""",False,0.00322
+11801,references to psychological or physical states,False,0.00023
+12507,instances of quantifiable or comparative phrases,False,0.01244
+13008,references to prominent female figures in the music industry,False,0.00046
+13665,instances of damage and destruction,False,0.007189999999999999
+15125,mentions of inputs related to various processes or systems,False,8e-05
+15551,references to injuries and athletic matchups in sports contexts,False,0.02432
+16927,phrases related to captions and captioning in various contexts,False,6e-05
+18185,phrases indicating uncertainty or speculation,False,0.02476
+19906,references to notable publications and their associated authors or contributors,False,0.00147
+22856,references to characters or themes in literature and film,False,0.07
+23651,terms related to pregnancy and developmental health,False,0.00034
+23824,expressions of uncertainty or conditional statements,False,0.02032
+24204,specific numerical addresses or locations in the text,False,0.00115
+24223,references to video game controllers and their components,False,0.00021
+24525,distinct names or labels associated with entities or characters,False,0.00063
+24781,"phrases that describe conditions or situations, particularly negative ones",False,0.00305
+27704,mentions of membership levels and associated benefits,False,0.0009
+27752,terms associated with programming concepts and operations,False,0.00123
+29237,references to medical conditions related to organ health and their interactions,False,0.00229
+31781,concepts related to control and destiny,False,0.06984
+33267,"references to machines or machinery, particularly in a technical or operational context",False,0.00019
+33725,terms related to reporting and journalism,False,0.009479999999999999
+34786,references to lines and shapes in visual or graphical contexts,False,0.00039
+37638,numerical data and document formats,False,0.01824
+38036,terms related to dial-up internet connections,False,0.0003
+38773,terms related to corruption and its consequences,False,0.00291
+40033,terms related to supply and supply chain management,False,0.00019
+40968,instructions and actions related to user interactions with devices,False,0.00398
+42851,concepts related to optimization and maximization in various contexts,False,0.0008799999999999999
+43305,concepts and discussions surrounding rarity,False,0.00015
+43590,phrases related to economic conditions and forecasts,False,0.006840000000000001
+43719,specific names or titles in correspondence,False,0.0008
+43823,expressions of personal opinions regarding actions or statements,False,0.01864
+44502,references to individuals and their actions in a narrative context,False,0.02839
+45117,phrases related to medical symptoms and conditions,False,0.00807
+45239,terms related to functional programming and its development,False,0.00028
+48443,"references to individuals with the title ""Mr.""",False,0.00053
+52109,instances of offers and opportunities related to roles or positions,False,0.00332
+52338,terms related to execution of actions or operations in programming contexts,False,0.00017
+52411,titles of animated movies and related franchise names,False,0.00184
+53370,terms related to hydration and water,False,0.00013
+55875,"sentences that provide or reference information, especially in a structured or technical context",False,0.00563
+55995,terms related to relationships between doctors and patients,False,0.00398
+59580,references to Dutch culture and society,False,0.00851
+60158,references to habitat and species conservation,False,0.00016
+60768,scientific terms related to energy and physics,False,0.004010000000000001
+62188,"mentions of the name ""David Attenborough.""",False,0.0021
+63014,references to memory and nostalgia,False,0.0003
+66333,"references to ""Poly"" or related terms within the context of academic or computational discussions",False,0.00011
+67318,references to the concept of virtual environments or realities,False,0.00033
+68035,instances of legal actions and arrests,False,0.00252
+68344,references to mathematics and math-related concepts,False,0.00024
+68845,references to funerals and burial practices,False,0.01121
+69286,instances of the hyphen character,False,0.0014
+74880,references to radioactive materials and substances,False,7.000000000000001e-05
+77233,references to brain health and injury,False,0.00118
+78028,expressions of grief and loss,False,0.05028
+78464,mentions of mice in research contexts,False,7.000000000000001e-05
+78730,names of well-known celebrities and public figures,False,0.01001
+81860,mentions of technology product launches and specifications,False,0.01657
+82923,terms associated with the impacts and effects of policies or changes,False,0.00052
+83587,expressions of sadness or mourning related to tragic events,False,0.00506
+84173,phrases indicating the duration of time in relation to agreements or decisions,False,0.00223
+85079,discussions regarding healthcare legislation and political actions,False,0.02407
+86180,terms related to practitioners or professionals in a specific field,False,0.00027
+88468,terms related to gaming mechanics or features,False,0.00117
+90658,statistics and numerical data related to team performance,False,0.01005
+91449,rankings related to competitive performance in sports,False,0.04244
+93670,references to cooking and preparation times in a recipe context,False,0.00193
+94141,phrases related to titles and accomplishments,False,0.00121
+94983,instances of unusual or nonsensical characters or formatting in the text,False,0.00175
+95850,terms related to tournaments and competition rules,False,0.01233
+99993,references to errors and error handling in a technical context,False,0.00045
+101438,references to variety or differences,False,0.0005
+103366,references to passing or failing assessments and tests,False,0.0017
+105157,phrases related to physical actions and personal experiences,False,0.0008
+105912,references to clothing and garment-related terminology,False,0.00163
+107586,numerical values related to measurements and statistics,False,0.0008100000000000001
+108330,references to publication details and article origins,False,0.00216
+110050,concepts related to magical abilities and character classes in role-playing games,False,0.01177
+111093,references to research studies and their publication status in medical literature,False,0.00186
+111123,phrases indicating obligations or responsibilities,False,0.00215
+113027,terms related to clinical research and disease management,False,0.00311
+115959,terms related to humor and comedy,False,0.00066
+117533,references to languages and language-related content,False,0.00077
+117954,terms related to disease and health conditions,False,0.00021
+119749,terms related to distinctiveness or uniqueness,False,0.00021
+120530,elements related to beauty and inspiration,False,0.0034
+123450,terms related to specifications and standards in technical documents,False,0.00016
+125915,phrases indicating physical movement or actions,False,0.03078
+126038,references to ancient civilizations and their languages,False,0.00277
+128028,references to advanced methodologies in technology and research,False,0.00053
+128077,scientific terminology related to immune responses and molecular biology,False,0.00123
+128499,terms associated with infinite capabilities or ranges in a context related to gaming or digital manipulation,False,0.00188
+128773,terms related to licensing opportunities,False,0.00079
+129754,phrases related to existence or present conditions,False,0.001
+130561,terms related to legal proceedings and the judicial system,False,0.00547

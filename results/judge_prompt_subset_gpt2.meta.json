@@ -1,0 +1,11 @@
+{
+  "artifact": "judge_prompt_subset_gpt2.json",
+  "config": {
+    "n_selected": 8,
+    "n_total_prompts": 32,
+    "seed": 0,
+    "version": 1
+  },
+  "hash": "4f582c0112923b37",
+  "int_keyed": false
+}
